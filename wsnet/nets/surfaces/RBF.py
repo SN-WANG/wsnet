@@ -1,30 +1,65 @@
 # Radial Basis Function (RBF) Surrogate Model
 # Author: Shengning Wang
 
+import logging
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.linear_model import Ridge, LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.model_selection import KFold, cross_val_score
 from sklearn.metrics.pairwise import euclidean_distances
-from typing import Dict, Any, Tuple, Union, Optional
+from sklearn.preprocessing import StandardScaler
+from typing import Dict, Tuple, Union, Optional
 
 
-# Define the type for the regression model object
-RBFModel = Union[Ridge, LinearRegression]
+# Config Logging
+logging.basicConfig(
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%H:%M:%S',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 
-class RBF_Transformer:
+class RBF:
     """
-    Transforming raw features X into RBF features Phi(X)
+    Radial Basis Function (RBF) Surrogate Model.
+
+    Uses KMeans clustering to determine centers and computes Gaussian RBF features.
+
+    Attributes:
+    - num_centers (int): Number of RBF centers (neurons).
+    - gamma (float): RBF width parameter.
+    - alpha (float): Regularization strength.
+    - centers (np.ndarray): Learned cluster centers.
+    - model (Union[Ridge, LinearRegression]): The underlying linear weight solver.
+    - scaler_X (StandardScaler): Preprocessor for features.
+    - scaler_Y (StandardScaler): Preprocessor for targets.
     """
 
-    def __init__(self, num_centers: int = 100, gamma: Optional[float] = None, random_state: int = 42):
+    def __init__(self, num_centers: int = 20, gamma: float = 0.1, alpha: float = 0.0):
+        """
+        Initializes the RBF model configuration.
+
+        Args:
+        - num_centers (int): Number of centers to compute via KMeans.
+        - gamma (float): Kernel coefficient for RBF (width).
+        - alpha (float): Regularization strength for Ridge regression.
+        """
         self.num_centers = num_centers
         self.gamma = gamma
-        self.centers = None
-        self.random_state = random_state
+        self.alpha = alpha
+
+        # Initialize components
+        self.scaler_X = StandardScaler()
+        self.scaler_Y = StandardScaler()
+        self.centers: Optional[np.ndarray] = None
+
+        # Select internal regressor based on regularization
+        if self.alpha > 0:
+            self.model = Ridge(alpha=self.alpha)
+        else:
+            self.model = LinearRegression()
 
     def _init_centers(self, X: np.ndarray) -> np.ndarray:
         """
@@ -32,7 +67,7 @@ class RBF_Transformer:
         """
 
         num_samples = X.shape[0]
-        pca = PCA(n_components=min(X.shape), random_state=self.random_state)
+        pca = PCA(n_components=min(X.shape), random_state=42)
         X_pca = pca.fit_transform(X)
 
         indices = np.linspace(0, num_samples - 1, self.num_centers, dtype=int)
@@ -42,171 +77,121 @@ class RBF_Transformer:
 
         return centers_init
 
-    def fit(self, X: np.ndarray):
+    def _compute_features(self, X: np.ndarray) -> np.ndarray:
         """
-        Find RBF centers using K-means and set gamma if 'scale' is desired.
+        Computes the RBF feature matrix Phi(X).
+        Phi_j(x) = exp(-gamma * ||x - c_j||^2)
+
+        Args:
+        - X (np.ndarray): Scaled input features (num_samples, num_features).
+
+        Returns:
+        - np.ndarray: RBF features (num_samples, num_centers).
         """
+        # Distance matrix: (num_samples, num_centers)
+        dists = euclidean_distances(X, self.centers, squared=True)
+        return np.exp(-self.gamma * dists)
 
-        # Determine Centers
-        num_samples = X.shape[0]
+    def fit(self, X_train: np.ndarray, Y_train: np.ndarray) -> None:
+        """
+        Trains the Radial Basis Function (RBF) Surrogate Model.
 
+        Args:
+        - X_train (np.ndarray): Training feature data (num_samples, num_features)
+        - Y_train (np.ndarray): Training target data (num_samples, num_outputs)
+        """
+        if Y_train.ndim == 1:
+            Y_train = Y_train.reshape(-1, 1)
+
+        # 1. Preprocessing: Scale X and Y
+        X_scaled = self.scaler_X.fit_transform(X_train)
+        Y_scaled = self.scaler_Y.fit_transform(Y_train)
+
+        logger.info(f'Training RBF (Centers={self.num_centers}, Gamma={self.gamma})...')
+
+        # 2. Center Initialization (KMeans)
+        num_samples = X_scaled.shape[0]
         if self.num_centers >= num_samples:
-            self.centers = X
+            self.centers = X_scaled
             self.num_centers = num_samples
         else:
             centers_init = self._init_centers(X)
-            kmeans = KMeans(n_clusters=self.num_centers, init=centers_init,
-                            n_init=1, max_iter=500, random_state=self.random_state)
-            kmeans.fit(X)
+            kmeans = KMeans(n_clusters=self.num_centers, init=centers_init, n_init=1, max_iter=500, random_state=42)
+            kmeans.fit(X_scaled)
             self.centers = kmeans.cluster_centers_
 
-        # Set gamma
-        if self.gamma is None or self.gamma == 'scale':
+        # [Optional] Set gamma
+        if self.gamma is None:
             dist = euclidean_distances(self.centers, self.centers)
             np.fill_diagonal(dist, np.inf)
             min_dists = np.min(dist, axis=1)
             sigma = np.mean(min_dists)
             if sigma <= 1e-10:
                 sigma = 1.0
-
             self.gamma = 1.0 / (2.0 * sigma ** 2)
 
-        return self
+        # 3. Feature Transformation
+        Phi = self._compute_features(X_scaled)
 
-    def transform(self, X: np.ndarray) -> np.ndarray:
+        # 4. Model Training
+        self.model.fit(Phi, Y_scaled)
+
+        logger.info('Training completed')
+
+    def predict(self, X_test: np.ndarray, Y_test: Optional[np.ndarray] = None
+                ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
         """
-        Apply the RBF transformation
+        Predicts using the trained model.
+
+        Args:
+        - X_test (np.ndarray): Test feature data (num_samples, num_features).
+        - Y_test (Optional[np.ndarray]): Test target data (num_samples, num_outputs).
+
+        Returns:
+        - Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
+        - If Y_test is available: Returns a Tuple: (Y_pred, metrics)
+        - If Y_test is None: Returns only Y_pred
+
+        - Y_pred (np.ndarray): Predicted target values
+        - metrics (Dict[str, float]): Dictionary of evaluation metrics
         """
 
-        # Calculate squared Euclidean distance between each point in X and each RBF center
-        distances = euclidean_distances(X, self.centers, squared=True)
+        # 1. Preprocessing: scale test features
+        if self.centers is None:
+            raise RuntimeError('Model not fitted. Please call fit() first.')
 
-        # Apply the RBF Kernel (Gaussian)
-        X_rbf = np.exp(-self.gamma * distances)
+        X_test_scaled = self.scaler_X.transform(X_test)
 
-        return X_rbf
+        logger.info(f'Predicting RBF (Centers={self.num_centers}, Gamma={self.gamma})...')
 
-    def fit_transform(self, X: np.ndarray) -> np.ndarray:
-        """
-        Fit centers and transform the data
-        """
+        # 2. Feature Transformation
+        Phi_test = self._compute_features(X_test_scaled)
 
-        return self.fit(X).transform(X)
+        # 3. Perform predictions: predict on test points
+        Y_pred_scaled = self.model.predict(Phi_test)
 
+        logger.info(f'Prediction completed')
 
-def train_rbf_model(X_train: np.ndarray, Y_train: np.ndarray, num_centers: int = 100,
-                    gamma: Union[float, str] = 'scale', alpha: float = 1.0,
-                    use_cross_val: bool = True, cv_folds: int = 5) -> Dict[str, Any]:
-    """
-    Train a Radial Basis Function (RBF) Surrogate Model
+        # 4. Inverse Scaling: Convert back to original space
+        Y_pred = self.scaler_Y.inverse_transform(Y_pred_scaled)
 
-    Args:
-    - X_train (np.ndarray): Training feature data (num_samples, num_features)
-    - Y_train (np.ndarray): Training target data (num_samples, num_outputs)
-    - num_centers (int): Number of RBF centers. Key hyperparameter
-    - gamma (Union[float, str]): RBF kernel coefficient. 'scale' uses a heuristic
-    - alpha (float): Regularization strength (lambda) for the final Ridge regression
-    - use_cross_val (bool): Whether to perform cross-validation to assess model stability.
-    - cv_folds (int): Number of folds for K-fold cross-validation
+        # 5.1. Return predictions if y_test is not available (Inference Mode)
+        if Y_test is None:
+            return Y_pred
 
-    Returns:
-    - Dict[str, Any]: A dictionary containing the trained model, RBF transformer, and cross-validation results
-    """
+        # 5.2.1 Metrics Calculation: Evaluate model performance (Evaluation Mode)
+        r2 = r2_score(Y_test, Y_pred)
+        mse = mean_squared_error(Y_test, Y_pred)
+        rmse = np.sqrt(mse)
 
-    # Feature Engineering: Determine centers, bandwidth, and transform features
-    rbf_transformer = RBF_Transformer(num_centers=num_centers, gamma=gamma, random_state=42)
-    X_rbf = rbf_transformer.fit_transform(X_train)  # (num_samples, num_centers)
-
-    # Model Selection: Choose the regression algorithm (Ridge for regularization)
-    if alpha > 0.0:
-        # Ridge regression
-        model = Ridge(alpha=alpha, solver='auto', random_state=42)
-        model_name = 'Ridge RBF Model'
-    else:
-        # Standard linear regression
-        model = LinearRegression()
-        model_name = 'Standard RBF Model'
-
-    # Model Training: Fit the model to the RBF (Kernel) features
-    print(f'# Training {model_name} with num_centers={num_centers}, gamma={rbf_transformer.gamma:.4f}, alpha={alpha}...')
-    model.fit(X_rbf, Y_train)
-    print(f'# {model_name} training completed')
-
-    # Cross-validation: Assess generalization performance
-    cv_results = {}
-    if use_cross_val:
-        cv_scores = cross_val_score(estimator=model, X=X_rbf, y=Y_train, scoring='r2',
-                                    cv=KFold(n_splits=cv_folds, shuffle=True, random_state=42), n_jobs=-1)
-        
-        cv_results = {
-            'cv_folds':cv_folds,
-            'cv_mean_scores': np.mean(cv_scores),
-            'cv_std_scores': np.std(cv_scores),
-            'cv_scores': cv_scores.tolist()
+        metrics = {
+            'r2': r2,
+            'mse': mse,
+            'rmse': rmse
         }
 
-    # Return the trained model
-    return {
-        'model_name': model_name,
-        'model': model,
-        'rbf_transformer': rbf_transformer,
-        'num_centers': num_centers,
-        'gamma': rbf_transformer.gamma,
-        'alpha': alpha,
-        'cv_results': cv_results
-    }
-
-
-def test_rbf_model(trained_model_dict: Dict[str, Any],
-                   X_test: np.ndarray, Y_test: Optional[np.ndarray] = None
-                   ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
-    """
-    Evaluate the trained Radial Basis Function (RBF) Surrogate Model on test data
-
-    Args:
-    - trained_model_dict (Dict[str, Any]): Dictionary returned by train_rbf_model
-    - X_test (np.ndarray): Test feature data (num_samples, num_features)
-    - Y_test (np.ndarray, Optional): Test target data (num_samples, num_outputs)
-
-    Returns:
-    - Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
-    - If Y_test is available: Returns a Tuple: (Y_pred, metrics)
-    - If Y_test is None: Returns only Y_pred
-
-    - Y_pred (np.ndarray): Predicted target values
-    - metrics (Dict[str, float]): Dictionary of evaluation metrics
-    """
-
-    # Retrieve the trained components
-    model_name = trained_model_dict['model_name']
-    model: RBFModel = trained_model_dict['model']
-    rbf_transformer: RBF_Transformer = trained_model_dict['rbf_transformer']
-
-    # Feature Transformer: Apply the RBF transformation to the test data
-    X_test_rbf = rbf_transformer.transform(X_test)
-
-    # Prediction: Generate predictions on the transformed test features
-    print(f'# Predicting {model_name}...')
-    Y_pred = model.predict(X_test_rbf)
-    print(f'# {model_name} prediction completed')
-
-    # Return predictions if Y_test is not available (Inference Mode)
-    if Y_test is None:
-        return Y_pred
-
-    # Metrics Calculation: Evaluate model performance (Evaluation Mode)
-    r2 = r2_score(Y_test, Y_pred)
-    mse = mean_squared_error(Y_test, Y_pred)
-    rmse = np.sqrt(mse)
-
-    metrics = {
-        'r2': r2,
-        'mse': mse,
-        'rmse': rmse
-    }
-
-    # Return predictions and performance metrics
-    return Y_pred, metrics
+        # 5.2.2 Return predictions and performance metrics
+        return Y_pred, metrics
 
 
 # ======================================================================
@@ -215,7 +200,7 @@ def test_rbf_model(trained_model_dict: Dict[str, Any],
 if __name__ == '__main__':
     # Simulate data
     np.random.seed(42)
-    N = 1000
+    N = 100
     X = np.random.rand(N, 2) * 10
 
     # Branin function
@@ -232,14 +217,15 @@ if __name__ == '__main__':
     X_train, X_test = X[:split_idx], X[split_idx:]
     Y_train, Y_test = Y[:split_idx], Y[split_idx:]
 
-    # Train model
-    model = train_rbf_model(X_train, Y_train, num_centers=150, gamma='scale', alpha=0.0)
+    # Instantiate RBF model
+    model = RBF()
 
-    # Show cross-validation results
-    print(f'# Cross-validation Mean R2: {model['cv_results']['cv_mean_scores']:.9f}')
+    # Train RBF model
+    model.fit(X_train, Y_train)
 
-    # Test model
-    Y_pred, test_metrics = test_rbf_model(model, X_test, Y_test)
+    # Test RBF model
+    Y_pred, test_metrics = model.predict(X_test, Y_test)
 
     # Show testing results
-    print(f'# Testing R2: {test_metrics['r2']:.9f}')
+    logger.info(f'Testing R2: {test_metrics['r2']:.9f}')
+    logger.info(f'Testing MSE: {test_metrics['mse']:.9f}')

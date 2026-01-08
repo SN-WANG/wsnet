@@ -1,129 +1,142 @@
 # Polynomial Regression Surface (PRS) Surrogate Model
 # Author: Shengning Wang
 
+import logging
 import numpy as np
-from sklearn.preprocessing import PolynomialFeatures
+from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 from sklearn.linear_model import Ridge, LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.model_selection import KFold, cross_val_score
-from typing import Dict, Any, Tuple, Union, Optional
+from typing import Dict, Tuple, Union, Optional
 
 
-# Define the type for the model object
-PRSModel = Union[Ridge, LinearRegression]
+# Config Logging
+logging.basicConfig(
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%H:%M:%S',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 
-def train_prs_model(X_train: np.ndarray, Y_train: np.ndarray, degree: int = 2,
-                    alpha: float = 1.0, use_cross_val: bool = True, cv_folds: int = 5) -> Dict[str, Any]:
+class PRS:
     """
-    Train a Polynomial Regression Surface (PRS) Surrogate Model
+    Polynomial Regression Surface (PRS) Surrogate Model.
 
-    Args:
-    - X_train (np.ndarray): Training feature data (num_samples, num_features)
-    - Y_train (np.ndarray): Training target data (num_samples, num_outputs)
-    - degree (int): The degree of the polynomial features
-    - alpha (float): Regularization strength (lambda) for Ridge regression
-                     Set to 0.0 to use standard Linear Regression
-    - use_cross_val (bool): Whether to perform cross-validation to assess model stability and performance
-    - cv_folds (int): Number of folds for K-fold cross-validation
+    Utilizes polynomial feature expansion followed by linear (or ridge) regression.
 
-    Returns:
-    - Dict[str, Any]: A dictionary containing the trained model, feature transformer, and cross-validation results
+    Attributes:
+    - degree (int): The degree of the polynomial features.
+    - alpha (float): Regularization strength for Ridge regression (0.0 for OLS).
+    - model (Union[Ridge, LinearRegression]): The underlying regressor.
+    - poly_trans (PolynomialFeatures): Feature transformer.
+    - scaler_X (StandardScaler): Preprocessor for features.
+    - scaler_Y (StandardScaler): Preprocessor for targets.
+    - if_fitted (bool): Status flag.
     """
 
-    # Feature Engineering: Generate polynomial and interaction features
-    poly_transformer = PolynomialFeatures(degree=degree, include_bias=False)
-    X_poly = poly_transformer.fit_transform(X_train)  # (num_samples, num_new_features)
+    def __init__(self, degree: int = 3, alpha: float = 0.0):
+        """
+        Initializes the PRS model configuration.
 
-    # Model Selection: Choose the regression algorithm (Ridge for regularization)
-    if alpha > 0.0:
-        # Ridge regression
-        model = Ridge(alpha=alpha, solver='auto', random_state=42)
-        model_name = 'Ridge PRS Model'
-    else:
-        # Standard linear regression
-        model = LinearRegression()
-        model_name = 'Standard PRS Model'
+        Args:
+        - degree (int): The degree of the polynomial features.
+        - alpha (float): Regularization strength. If 0.0, uses LinearRegression. If > 0.0, uses Ridge regression.
+        """
+        self.degree = degree
+        self.alpha = alpha
 
-    # Model Training: Fit the model to the polynomial features
-    print(f'# Training {model_name} with degree={degree}, alpha={alpha}...')
-    model.fit(X_poly, Y_train)
-    print(f'# {model_name} training completed')
+        # Initialize components
+        self.poly_trans = PolynomialFeatures(degree=degree)
+        self.scaler_X = StandardScaler()
+        self.scaler_Y = StandardScaler()
 
-    # Cross-validation: Assess generalization performance
-    cv_results = {}
-    if use_cross_val:
-        cv_scores = cross_val_score(estimator=model, X=X_poly, y=Y_train, scoring='r2',
-                                    cv=KFold(n_splits=cv_folds, shuffle=True, random_state=42), n_jobs=-1)
+        # Select internal regressor based on regularization
+        if self.alpha > 0:
+            self.model = Ridge(alpha=self.alpha)
+        else:
+            self.model = LinearRegression()
 
-        cv_results = {
-            'cv_folds': cv_folds,
-            'cv_mean_scores': np.mean(cv_scores),
-            'cv_std_scores': np.std(cv_scores),
-            'cv_scores': cv_scores.tolist()
+        self.is_fitted = False
+
+    def fit(self, X_train: np.ndarray, Y_train: np.ndarray) -> None:
+        """
+        Trains the Polynomial Regression Surface (PRS) Surrogate Model.
+
+        Args:
+        - X_train (np.ndarray): Training feature data (num_samples, num_features).
+        - Y_train (np.ndarray): Training target data (num_samples, num_outputs).
+        """
+        if Y_train.ndim == 1:
+            Y_train = Y_train.reshape(-1, 1)
+
+        # 1. Preprocessing: scale train features and targets
+        X_scaled = self.scaler_X.fit_transform(X_train)
+        Y_scaled = self.scaler_Y.fit_transform(Y_train)
+
+        logger.info(f'Training PRS (Degree={self.degree}, Alpha={self.alpha})...')
+
+        # 2. Feature Transformation: Polynomial expansion
+        X_poly = self.poly_trans.fit_transform(X_scaled)
+
+        # 3. Model Training
+        self.model.fit(X_poly, Y_scaled)
+        self.is_fitted = True
+
+        logger.info('Training completed')
+
+    def predict(self, X_test: np.ndarray, Y_test: Optional[np.ndarray] = None
+                ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
+        """
+        Predicts using the trained model.
+
+        Args:
+        - X_test (np.ndarray): Test feature data (num_samples, num_features).
+        - Y_test (Optional[np.ndarray]): Test target data (num_samples, num_outputs).
+
+        Returns:
+        - Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
+        - If Y_test is available: Returns a Tuple: (Y_pred, metrics)
+        - If Y_test is None: Returns only Y_pred
+
+        - Y_pred (np.ndarray): Predicted target values
+        - metrics (Dict[str, float]): Dictionary of evaluation metrics
+        """
+
+        # 1. Preprocessing: scale test features
+        if not self.is_fitted:
+            raise RuntimeError('Model not fitted. Please call fit() first.')
+
+        X_test_scaled = self.scaler_X.transform(X_test)
+
+        # 2. Feature Transformation: Polynomial expansion
+        X_poly = self.poly_trans.transform(X_test_scaled)
+
+        # 3. Perform predictions: predict on test points
+        logger.info(f'Predicting PRS (Degree={self.degree}, Alpha={self.alpha})...')
+        Y_pred_scaled = self.model.predict(X_poly)
+
+        logger.info(f'Prediction completed')
+
+        # 4. Inverse Scaling: Convert back to original space
+        Y_pred = self.scaler_Y.inverse_transform(Y_pred_scaled)
+
+        # 5.1. Return predictions if y_test is not available (Inference Mode)
+        if Y_test is None:
+            return Y_pred
+
+        # 5.2.1 Metrics Calculation: Evaluate model performance (Evaluation Mode)
+        r2 = r2_score(Y_test, Y_pred)
+        mse = mean_squared_error(Y_test, Y_pred)
+        rmse = np.sqrt(mse)
+
+        metrics = {
+            'r2': r2,
+            'mse': mse,
+            'rmse': rmse
         }
 
-    # Return the trained model
-    return {
-        'model_name': model_name,
-        'model': model,
-        'poly_transformer': poly_transformer,
-        'degree': degree,
-        'alpha': alpha,
-        'cv_results': cv_results
-    }
-
-
-def test_prs_model(trained_model_dict: Dict[str, Any],
-                   X_test: np.ndarray, Y_test: Optional[np.ndarray] = None
-                   ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
-    """
-    Evaluate the trained Polynomial Regression Surface (PRS) Surrogate Model on test data
-
-    Args:
-    - trained_model_dict (Dict[str, Any]): Dictionary returned by train_prs_model
-    - X_test (np.ndarray): Test feature data (num_samples, num_features)
-    - Y_test (np.ndarray, Optional): Test target data (num_samples, num_outputs)
-
-    Returns:
-    - Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
-    - If Y_test is available: Returns a Tuple: (Y_pred, metrics)
-    - If Y_test is None: Returns only Y_pred
-
-    - Y_pred (np.ndarray): Predicted target values
-    - metrics (Dict[str, float]): Dictionary of evaluation metrics
-    """
-
-    # Retrieve the trained model
-    model_name = trained_model_dict['model_name']
-    model: PRSModel = trained_model_dict['model']
-    poly_transformer: PolynomialFeatures = trained_model_dict['poly_transformer']
-
-    # Feature Transformer: Apply the PRS transformation to the test data
-    X_test_poly = poly_transformer.transform(X_test)
-
-    # Prediction: Generate predictions on the transformed test features
-    print(f'# Predicting {model_name}...')
-    Y_pred = model.predict(X_test_poly)
-    print(f'# {model_name} prediction completed')
-
-    # Return predictions if Y_test is not available (Inference Mode)
-    if Y_test is None:
-        return Y_pred
-
-    # Metrics Calculation: Evaluate model performance (Evaluation Mode)
-    r2 = r2_score(Y_test, Y_pred)
-    mse = mean_squared_error(Y_test, Y_pred)
-    rmse = np.sqrt(mse)
-
-    metrics = {
-        'r2': r2,
-        'mse': mse,
-        'rmse': rmse
-    }
-
-    # Return predictions and performance metrics
-    return Y_pred, metrics
+        # 5.2.2 Return predictions and performance metrics
+        return Y_pred, metrics
 
 
 # ======================================================================
@@ -132,7 +145,7 @@ def test_prs_model(trained_model_dict: Dict[str, Any],
 if __name__ == '__main__':
     # Simulate data
     np.random.seed(42)
-    N = 1000
+    N = 100
     X = np.random.rand(N, 2) * 10
 
     # Branin function
@@ -149,14 +162,15 @@ if __name__ == '__main__':
     X_train, X_test = X[:split_idx], X[split_idx:]
     Y_train, Y_test = Y[:split_idx], Y[split_idx:]
 
-    # Train model
-    model = train_prs_model(X_train, Y_train, degree=3, alpha=0.5)
+    # Instantiate PRS model
+    model = PRS()
 
-    # Show cross-validation results
-    print(f'# Cross-validation Mean R2: {model['cv_results']['cv_mean_scores']:.9f}')
+    # Train PRS model
+    model.fit(X_train, Y_train)
 
-    # Test model
-    Y_pred, test_metrics = test_prs_model(model, X_test, Y_test)
+    # Test PRS model
+    Y_pred, test_metrics = model.predict(X_test, Y_test)
 
     # Show testing results
-    print(f'# Testing R2: {test_metrics['r2']:.9f}')
+    logger.info(f'Testing R2: {test_metrics['r2']:.9f}')
+    logger.info(f'Testing MSE: {test_metrics['mse']:.9f}')

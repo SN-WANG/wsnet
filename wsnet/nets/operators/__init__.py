@@ -3,8 +3,8 @@
 Subpackage for neural operator surrogate models.
 """
 
-from .DeepONet import DeepONet
-from .GeoFNO import GeoFNO
+from .deeponet import DeepONet
+from .geofno import GeoFNO
 
 __all__ = [
     'DeepONet',
