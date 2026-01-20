@@ -21,7 +21,7 @@ from wsnet.utils import lhs_design
 import wsnet.utils.Engine as E
 
 
-from wsnet.examples.AeroOptSolver import (
+from wsnet.apps.AeroOptSolver import (
     # Hybrid Surrogate Models
     TAHS,
 

@@ -1,6 +1,6 @@
 # wsnet/utils/__init__.py
 """
-wsnet.utils: Engineering utilities for deep learning and surrogate modeling.
+wsnet.utils: Workflow utilities for deep learning and surrogate modeling.
 Includes Deep Learning Engine, DoE, CFD Data Parsing, and CFD Data Rendering.
 """
 
@@ -24,11 +24,6 @@ from .CFDParser import CFDataset, find_case_dirs
 
 # Hoist from CFDRender (CFD Data Rendering)
 from .CFDRender import CFDAnimation
-
-
-__version__ = '1.3.2'
-__author__ = 'Shengning Wang (王晟宁)'
-__email__ = 'snwang2023@163.com'
 
 
 __all__ = [

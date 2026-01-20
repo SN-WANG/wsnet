@@ -23,10 +23,6 @@ from .operators import (
     GeoFNO
 )
 
-__version__ = '1.3.2'
-__author__ = 'Shengning Wang (王晟宁)'
-__email__ = 'snwang2023@163.com'
-
 
 __all__ = [
     # Surfaces

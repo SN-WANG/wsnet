@@ -1,6 +1,6 @@
-# wsnet/examples/AeroOptSolver/__init__.py
+# wsnet/apps/AeroOptSolver/__init__.py
 """
-wsnet.eaxmples.AeroOptSolver: An Aero Optimization Solver Platform.
+wsnet.apps.AeroOptSolver: An Aero Optimization Solver Platform.
 """
 
 # Hoist from Hybrid Surrogate Models
