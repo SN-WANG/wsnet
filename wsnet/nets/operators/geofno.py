@@ -292,6 +292,10 @@ class GeoFNO(nn.Module):
         self.dropout = nn.Dropout(p=0.1)
         self.fc_proj2 = nn.Linear(128, out_channels)
 
+        # Initialize the model as Identity
+        nn.init.zeros_(self.fc_proj2.weight)
+        nn.init.zeros_(self.fc_proj2.bias)
+
     def _p2g_sample(self, features: Tensor, latent_coords: Tensor) -> Tensor:
         """
         Point-to-Grid (P2G) Encoding: Maps unstructured features to a regular grid using
@@ -434,6 +438,10 @@ class GeoFNO(nn.Module):
         output = F.gelu(output)
         output = self.dropout(output)
         output = self.fc_proj2(output)
+
+        # 6. Global Residual Connection: x_{t+1} = x_t + GeoFNO(x_t, coords)
+        if input_features.shape[-1] == output.shape[-1]:
+            output = input_features + output
 
         return output
 
