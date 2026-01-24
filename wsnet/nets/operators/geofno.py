@@ -292,10 +292,6 @@ class GeoFNO(nn.Module):
         self.dropout = nn.Dropout(p=0.1)
         self.fc_proj2 = nn.Linear(128, out_channels)
 
-        # Initialize the model as Identity
-        nn.init.zeros_(self.fc_proj2.weight)
-        nn.init.zeros_(self.fc_proj2.bias)
-
     def _p2g_sample(self, features: Tensor, latent_coords: Tensor) -> Tensor:
         """
         Point-to-Grid (P2G) Encoding: Maps unstructured features to a regular grid using
