@@ -193,15 +193,14 @@ class MMFS:
 
         E.logger.info(f'Training MMFS (LF=RBF, SigmaBounds={self.sigma_bounds})...')
 
-        # 1. Fit LF model (Step 2 in paper)
-        # Note: LF model handles its own normalization internally via the RBF class
+        # 1. Fit LF model
         self.lf_model.fit(x_lf, y_lf)
 
-        # 2. Scale HF data (Requirement 4 & Paper context)
+        # 2. Scale HF data
         self.x_hf_train_ = self.scaler_x.fit_transform(x_hf)
         self.y_hf_train_ = self.scaler_y.fit_transform(y_hf)
 
-        # 3. Get LF predictions at HF points (Y_c in paper)
+        # 3. Get LF predictions at HF points (Y_c)
         # We need these predictions to be in the same scale as the scaled HF targets
         # for the correction coefficients to be meaningful.
         y_lf_at_hf_raw = self.lf_model.predict(x_hf)
@@ -224,7 +223,7 @@ class MMFS:
         self.sigma_ = res.x
         E.logger.info(f'Optimal sigma found: {self.sigma_:.4f}')
 
-        # 5. Compute Final Coefficients (Beta) for each output (Step 4 in paper)
+        # 5. Compute Final Coefficients (Beta) for each output
         # Construct Correlation Matrix Phi
         phi_train = self._multiquadric_kernel(dist_matrix, self.sigma_)
 
@@ -243,7 +242,7 @@ class MMFS:
             self.beta_.append(beta_m)
 
         self.is_fitted = True
-        E.logger.info(f'MMFS training completed.')
+        E.logger.info('MMFS training completed.')
 
     def predict(self, x_test: np.ndarray, y_test: Optional[np.ndarray] = None
                 ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:

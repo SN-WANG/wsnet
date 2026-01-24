@@ -392,26 +392,30 @@ class AutoregressiveTrainer(BaseTrainer):
     Assume the model follows an autoregressive pattern: x_{t+1} = model(x_t, conditions).
 
     Key features:
-    1. Multi-step pushforward: unrolls the model for k steps during training.
+    1. Multi-step pushforward: Unrolls the model for k steps during training.
     2. Curriculum schedule: Dynamically adjusts rollout length during training.
-    3. Noise injection: adds Gaussian noise to inputs during rollout to improve stability.
+    3. Noise injection: Adds Gaussian noise to inputs during rollout to improve stability.
+    4. Sobolev Loss: Adds spatial gradient penalty.
     """
 
-    def __init__(self, model: nn.Module, pushforward_steps: int = 5, noise_std: float = 0.0,
-                 curriculum_schedule: Optional[Callable[[int], int]] = None, **kwargs):
+    def __init__(self, model: nn.Module, pushforward_steps: int = 5,
+                 curriculum_schedule: Optional[Callable[[int], int]] = None,
+                 noise_std: float = 0.0, sobolev_beta: float = 0.1, **kwargs):
         """
         Args:
         - model (nn.Module): The neural network.
         - pushforward_steps (int): The number of autoregressive steps to unroll during training.
                                    If curriculum_schedule is provided, this is the maximum steps.
-        - noise_std (float): Standard deviation of Gaussian noise added to inputs during training.
         - curriculum_schedule (Optional[Callable[[int], int]]): A function mapping epoch -> steps.
+        - noise_std (float): Standard deviation of Gaussian noise added to inputs during training.
+        - sobolev_beta (float): Weight for the spatial gradient penalty.
         - **kwargs: Arguments passed to BaseTrainer (optimizer, criterion, etc.).
         """
         super().__init__(model, **kwargs)
         self.pushforward_steps = pushforward_steps
-        self.noise_std = noise_std
         self.curriculum_schedule = curriculum_schedule
+        self.noise_std = noise_std
+        self.sobolev_beta = sobolev_beta
 
     def _get_current_steps(self) -> int:
         """Determines the number of rollout steps for the current epoch."""
@@ -429,7 +433,7 @@ class AutoregressiveTrainer(BaseTrainer):
         2. For t = 0 to k:
             a. Inject noise: tilde_x_t = x_t + epsilon
             b. Predict: hat_x_t+1 = f(tilde_x_t)
-            c. Compute loss: L_t = ||hat_x_t+1 - gt_x_t+1||^2
+            c. Compute Sobolev loss: L_t = ||hat_x_t+1 - gt_x_t+1||^2 + beta * ||grad(hat_x_t+1) - grad(gt_x_t+1)||^2
             d. Update state: x_t+1 = hat_x_t+1
 
         Args:
@@ -466,10 +470,15 @@ class AutoregressiveTrainer(BaseTrainer):
             else:
                 pred_state = self.model(input_state)
 
-            # C. Compute step loss
+            # C. Compute step Sobolev loss
             target_state = seq_window[:, t + 1]
-            step_loss = self.criterion(pred_state, target_state)
-            loss += step_loss
+            grad_pred = pred_state[:, 1:, :] - pred_state[:, :-1, :]
+            grad_target = target_state[:, 1:, :] - target_state[:, :-1, :]
+
+            primary_loss = self.criterion(pred_state, target_state)
+            penalty_loss = self.criterion(grad_pred, grad_target)
+
+            loss += (primary_loss + self.sobolev_beta * penalty_loss)
 
             # D. Pushforward
             current_state = pred_state
