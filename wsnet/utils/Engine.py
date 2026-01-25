@@ -394,7 +394,7 @@ class AutoregressiveTrainer(BaseTrainer):
     Key features:
     1. Multi-step pushforward: Unrolls the model for k steps during training.
     2. Curriculum schedule: Dynamically adjusts rollout length during training.
-    3. Noise injection: Adds Gaussian noise to inputs during rollout to improve stability.
+    3. Noise injection: Adds Gaussian noise to inputs to improve stability.
     4. Sobolev Loss: Adds spatial gradient penalty.
     """
 
@@ -433,7 +433,7 @@ class AutoregressiveTrainer(BaseTrainer):
         2. For t = 0 to k:
             a. Inject noise: tilde_x_t = x_t + epsilon
             b. Predict: hat_x_t+1 = f(tilde_x_t)
-            c. Compute Sobolev loss: L_t = ||hat_x_t+1 - gt_x_t+1||^2 + beta * ||grad(hat_x_t+1) - grad(gt_x_t+1)||^2
+            c. Compute Sobolev loss: L_t = loss(hat_x_t+1, gt_x_t+1) + beta * loss(grad(hat_x_t+1), grad(gt_x_t+1))
             d. Update state: x_t+1 = hat_x_t+1
 
         Args:
@@ -453,17 +453,15 @@ class AutoregressiveTrainer(BaseTrainer):
         seq_window, coords_window = batch
 
         # 3. Autoregressive Unrolling
-        current_state = seq_window[:, 0]  # t = 0
+        input_state = seq_window[:, 0]  # t = 0
         loss = torch.tensor(0.0, device=self.device)
 
-        for t in range(rollout_steps):
-            # A. Noise injection
-            if self.model.training and self.noise_std > 0:
-                noise = torch.randn_like(current_state) * self.noise_std
-                input_state = current_state + noise
-            else:
-                input_state = current_state
+        # A. Noise injection
+        if self.model.training and self.noise_std > 0:
+            noise = torch.rand_like(input_state) * self.noise_std
+            input_state = input_state + noise
 
+        for t in range(rollout_steps):
             # B. Forward pass
             if coords_window is not None:
                 pred_state = self.model(input_state, coords_window)
@@ -472,16 +470,16 @@ class AutoregressiveTrainer(BaseTrainer):
 
             # C. Compute step Sobolev loss
             target_state = seq_window[:, t + 1]
-            grad_pred = pred_state[:, 1:, :] - pred_state[:, :-1, :]
-            grad_target = target_state[:, 1:, :] - target_state[:, :-1, :]
+            pred_grad = pred_state[:, 1:, :] - pred_state[:, :-1, :]
+            target_grad = target_state[:, 1:, :] - target_state[:, :-1, :]
 
             primary_loss = self.criterion(pred_state, target_state)
-            penalty_loss = self.criterion(grad_pred, grad_target)
+            penalty_loss = self.criterion(pred_grad, target_grad)
 
             loss += (primary_loss + self.sobolev_beta * penalty_loss)
 
             # D. Pushforward
-            current_state = pred_state
+            input_state = pred_state
 
         return loss / rollout_steps
 
