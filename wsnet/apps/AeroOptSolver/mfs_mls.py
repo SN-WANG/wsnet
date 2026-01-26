@@ -17,7 +17,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from wsnet.nets import RBF
-import wsnet.utils.Engine as E
+from wsnet.utils import sl, logger
 
 
 class MFSMLS:
@@ -84,7 +84,7 @@ class MFSMLS:
         if x_hf.ndim == 1: x_hf = x_lf.reshape(-1, 1)
         if y_hf.ndim == 1: y_hf = y_hf.reshape(-1, 1)
 
-        E.logger.info(f'Training MFS-MLS (PolyDegree={self.poly_degree})...')
+        logger.info(f'{sl.g}training MFS-MLS (PolyDegree={self.poly_degree})...{sl.q}')
 
         # 1. Train LF model on raw data
         self.lf_model.fit(x_lf, y_lf)
@@ -106,7 +106,7 @@ class MFSMLS:
         self.d_max_ = np.max(dist_matrix)
 
         self.is_fitted = True
-        E.logger.info(f'MFS-MLS training completed.')
+        logger.info(f'{sl.g}MFS-MLS training completed.{sl.q}')
 
     def predict(self, x_test: np.ndarray, y_test: Optional[np.ndarray] = None
                 ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
@@ -140,7 +140,7 @@ class MFSMLS:
 
         x_test_scaled = self.scaler_x.transform(x_test)
 
-        E.logger.info(f'Predicting MFS-MLS (PolyDegree={self.poly_degree})...')
+        logger.info(f'{sl.g}predicting MFS-MLS (PolyDegree={self.poly_degree})...{sl.q}')
 
         # 2. Prepare basis for query points
         y_lf_at_test = self.lf_model.predict(x_test)
@@ -180,7 +180,7 @@ class MFSMLS:
                 coeffs = np.linalg.pinv(lhs) @ rhs
                 y_pred_scaled[i, :] = p_test_[i : i + 1, :] @ coeffs
 
-        E.logger.info(f'MFS-MLS prediction completed.')
+        logger.info(f'{sl.g}MFS-MLS prediction completed.{sl.q}')
 
         # 5. Inverse Scaling: Convert back to original space
         y_pred = self.scaler_y.inverse_transform(y_pred_scaled)
@@ -231,6 +231,6 @@ if __name__ == '__main__':
     y_pred, test_metrics = model.predict(x_test, y_test)
 
     # Log results
-    E.logger.info(f'Testing R2: {test_metrics['r2']:.9f}')
-    E.logger.info(f'Testing MSE: {test_metrics['mse']:.9f}')
-    E.logger.info(f'Testing RMSE: {test_metrics['rmse']:.9f}')
+    logger.info(f'Testing R2: {sl.m}{test_metrics['r2']:.9f}{sl.q}')
+    logger.info(f'Testing MSE: {sl.m}{test_metrics['mse']:.9f}{sl.q}')
+    logger.info(f'Testing RMSE: {sl.m}{test_metrics['rmse']:.9f}{sl.q}')

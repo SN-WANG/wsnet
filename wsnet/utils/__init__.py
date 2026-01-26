@@ -4,20 +4,22 @@ wsnet.utils: Workflow utilities for deep learning and surrogate modeling.
 Includes Deep Learning Engine, DoE, CFD Data Parsing, and CFD Data Rendering.
 """
 
-# Hoist from Engine (Deep Learning Engine)
-from .Engine import (
-    # 1. Utilities & Reproducibility
-    logger, seed_everything,
-    # 2. Data Processing & Normalization
+# Hoist from engine (Deep Learning Engine)
+from .engine import (
+    # 1. Logger & Seed Setter
+    sl, logger, seed_everything,
+    # 2. Metrics & Loss Functions
+    NMSELoss, compute_ar_metrics,
+    # 3. Data Processing & Standardization
     BaseDataset, TensorScaler,
-    # 3. Core Engine: The Base Trainer
+    # 4. Core Engine: The Base Trainer
     BaseTrainer,
-    # 4. Concrete Implementations
+    # 5. Concrete Implementations
     SupervisedTrainer, AutoregressiveTrainer
 )
 
 # Hoist from DoE (Design of Experiments)
-from .DoE import lhs_design
+from .doe import lhs_design
 
 # Hoist from CFDataParser (CFD Data Parsing)
 from .CFDParser import CFDataset, find_case_dirs
@@ -27,22 +29,24 @@ from .CFDRender import CFDAnimation
 
 
 __all__ = [
-    # Engine
-    # 1. Utilities & Reproducibility
-    'logger', 'seed_everything',
-    # 2. Data Processing & Normalization
-    'BaseDataset', 'TensorScaler',
-    # 3. Core Engine: The Base Trainer
-    'BaseTrainer',
-    # 4. Concrete Implementations
-    'SupervisedTrainer', 'AutoregressiveTrainer',
+    # Deep Learning Engine
+    # 1. Logger & Seed Setter
+    "sl", "logger", "seed_everything",
+    # 2. Metrics & Loss Functions
+    "NMSELoss", "compute_ar_metrics",
+    # 3. Data Processing & Standardization
+    "BaseDataset", "TensorScaler",
+    # 4. Core Engine: The Base Trainer
+    "BaseTrainer",
+    # 5. Concrete Implementations
+    "SupervisedTrainer", "AutoregressiveTrainer",
 
     # DoE
-    'lhs_design'
+    "lhs_design"
 
     # CFDataParser
-    'CFDataset', 'find_case_dirs'
+    "CFDataset", "find_case_dirs"
 
     # CFDataRenderer
-    'CFDAnimation'
+    "CFDAnimation"
 ]

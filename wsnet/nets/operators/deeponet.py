@@ -1,10 +1,9 @@
 # Deep Operator Network (DeepONet) Surrogate Model
 # Author: Shengning Wang
 
-from typing import List, Optional, Callable, Tuple
-
 import torch
 from torch import nn, Tensor
+from typing import List, Optional, Callable, Tuple
 
 
 class DeepONet(nn.Module):

@@ -19,7 +19,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from wsnet.nets import RBF
-import wsnet.utils.Engine as E
+from wsnet.utils import sl, logger
 
 
 class MMFS:
@@ -191,7 +191,7 @@ class MMFS:
         if x_hf.ndim == 1: x_hf = x_hf.reshape(-1, 1)
         if y_hf.ndim == 1: y_hf = y_hf.reshape(-1, 1)
 
-        E.logger.info(f'Training MMFS (LF=RBF, SigmaBounds={self.sigma_bounds})...')
+        logger.info(f"{sl.g}training MMFS (LF=RBF, SigmaBounds={self.sigma_bounds})...{sl.q}")
 
         # 1. Fit LF model
         self.lf_model.fit(x_lf, y_lf)
@@ -213,7 +213,7 @@ class MMFS:
         # 4. Optimize Sigma via LOOCV (Step 3 in paper, Eq 10)
         dist_matrix = cdist(self.x_hf_train_, self.x_hf_train_, metric='euclidean')
 
-        E.logger.info('Optimizing MMFS shape parameter (sigma) via LOOCV...')
+        logger.info('optimizing MMFS shape parameter (sigma) via LOOCV...')
         res = minimize_scalar(
             fun=self._loocv_error,
             bounds=self.sigma_bounds,
@@ -221,7 +221,7 @@ class MMFS:
             method='bounded'
         )
         self.sigma_ = res.x
-        E.logger.info(f'Optimal sigma found: {self.sigma_:.4f}')
+        logger.info(f'{sl.y}optimal sigma found: {self.sigma_:.4f}{sl.q}')
 
         # 5. Compute Final Coefficients (Beta) for each output
         # Construct Correlation Matrix Phi
@@ -242,7 +242,7 @@ class MMFS:
             self.beta_.append(beta_m)
 
         self.is_fitted = True
-        E.logger.info('MMFS training completed.')
+        logger.info(f'{sl.g}MMFS training completed.{sl.q}')
 
     def predict(self, x_test: np.ndarray, y_test: Optional[np.ndarray] = None
                 ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
@@ -272,7 +272,7 @@ class MMFS:
         if not self.is_fitted:
             raise RuntimeError('Model not fitted. Please call fit() first.')
 
-        E.logger.info(f'Predicting MMFS...')
+        logger.info(f'{sl.g}predicting MMFS...{sl.q}')
 
         num_samples = x_test.shape[0]
         num_outputs = len(self.beta_)
@@ -309,7 +309,7 @@ class MMFS:
         # 5. Inverse Scale Predictions
         y_pred = self.scaler_y.inverse_transform(y_pred_scaled)
 
-        E.logger.info(f'MMFS prediction completed.')
+        logger.info(f'{sl.g}MMFS prediction completed.{sl.q}')
 
         # 6.1 Inference Mode
         if y_test is None:
@@ -364,7 +364,7 @@ if __name__ == '__main__':
     y_pred, test_metrics = model.predict(x_test, y_test)
 
     # Output Results
-    E.logger.info(f'--- Forretal Function Results ---')
-    E.logger.info(f'Testing R2: {test_metrics["r2"]:.9f}')
-    E.logger.info(f'Testing MSE: {test_metrics["mse"]:.9f}')
-    E.logger.info(f'Testing RMSE: {test_metrics["rmse"]:.9f}')
+    logger.info(f'--- Forretal Function Results ---')
+    logger.info(f'Testing R2: {sl.m}{test_metrics["r2"]:.9f}{sl.q}')
+    logger.info(f'Testing MSE: {sl.m}{test_metrics["mse"]:.9f}{sl.q}')
+    logger.info(f'Testing RMSE: {sl.m}{test_metrics["rmse"]:.9f}{sl.q}')

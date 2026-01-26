@@ -16,7 +16,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from wsnet.nets import PRS, RBF, KRG, SVR
-import wsnet.utils.Engine as E
+from wsnet.utils import sl, logger
 
 
 class TAHS:
@@ -126,13 +126,13 @@ class TAHS:
         if y_train.ndim == 1:
             y_train = y_train.reshape(-1, 1)
 
-        E.logger.info(f'Training T-AHS (Threshold={self.threshold})...')
+        logger.info(f'{sl.g}training T-AHS (Threshold={self.threshold})...{sl.q}')
 
         # --- Stage 1: Model Selection via LOO-CV ---
         cv_errors = []
 
         for name, model in zip(self.model_names, self.models_pool):
-            E.logger.info(f'Running LOO-CV for component: {name}...')
+            logger.info(f'running LOO-CV for component: {name}...')
             error = self._calculate_loo_error(model, x_train, y_train)
             cv_errors.append(error)
 
@@ -159,8 +159,8 @@ class TAHS:
 
         selected_names = [self.model_names[i] for i in self.activate_indices_]
 
-        E.logger.info(f'T-AHS Stage 1 complete. Selected models: {selected_names}. '
-                      f'Baseline: {self.model_names[self.baseline_index_]}.')
+        logger.info(f'{sl.g}T-AHS Stage 1 complete. {sl.q}Selected models: {sl.y}{selected_names}{sl.q}. '
+                      f'Baseline: {sl.y}{self.model_names[self.baseline_index_]}{sl.q}.')
 
         # --- Stage 2: Final Fitting ---
         # 1. Fit all ACTIVE models on the FULL training set
@@ -168,11 +168,11 @@ class TAHS:
             self.models_pool[i].fit(x_train, y_train)
 
         # 2. Fit the Uncertainty Model (KRG)
-        E.logger.info('Fitting uncertainty model (KRG) for adaptive weighting...')
+        logger.info(f'{sl.g}fitting uncertainty model (KRG) for adaptive weighting...{sl.q}')
         self.uncertainty_model_.fit(x_train, y_train)
 
         self.is_fitted = True
-        E.logger.info(f'T-AHS training completed.')
+        logger.info(f'{sl.g}T-AHS training completed.{sl.q}')
 
     def predict(self, x_test: np.ndarray, y_test: Optional[np.ndarray] = None
                 ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
@@ -205,7 +205,7 @@ class TAHS:
         num_samples = x_test.shape[0]
         num_outputs = self.uncertainty_model_.beta.shape[1]
 
-        E.logger.info(f'Predicting T-AHS (Active Models: {len(self.activate_indices_)})...')
+        logger.info(f'{sl.g}predicting T-AHS (Active Models: {len(self.activate_indices_)})...{sl.q}')
 
         # 1. Get Uncertainty Estimate (s^2)
         _, mse_pred_tuple = self.uncertainty_model_.predict(x_test)
@@ -244,7 +244,7 @@ class TAHS:
         denominator_sum = np.maximum(denominator_sum, 1e-12)
         y_pred = numerator_sum / denominator_sum
 
-        E.logger.info(f'T-AHS prediction completed.')
+        logger.info(f'{sl.g}T-AHS prediction completed.{sl.q}')
 
         # 5.1 Inference mode
         if y_test is None: return y_pred
@@ -292,6 +292,6 @@ if __name__ == '__main__':
     y_pred, test_metrics = model.predict(x_test, y_test)
 
     # Log results
-    E.logger.info(f'Testing R2: {test_metrics['r2']:.9f}')
-    E.logger.info(f'Testing MSE: {test_metrics['mse']:.9f}')
-    E.logger.info(f'Testing RMSE: {test_metrics['rmse']:.9f}')
+    logger.info(f'Testing R2: {sl.m}{test_metrics['r2']:.9f}{sl.q}')
+    logger.info(f'Testing MSE: {sl.m}{test_metrics['mse']:.9f}{sl.q}')
+    logger.info(f'Testing RMSE: {sl.m}{test_metrics['rmse']:.9f}{sl.q}')

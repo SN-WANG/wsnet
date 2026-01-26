@@ -17,8 +17,7 @@ if project_root not in sys.path:
 
 
 from wsnet.nets import PRS, RBF, KRG, SVR
-from wsnet.utils import lhs_design
-import wsnet.utils.Engine as E
+from wsnet.utils import lhs_design, sl, logger, seed_everything
 
 
 from wsnet.apps.AeroOptSolver import (
@@ -300,7 +299,7 @@ class Benchmarker:
             dim, bounds = config['dim'], np.array(config['bounds'])
             num_train, num_test = config['num_train'], config['num_test']
 
-            E.logger.info(f'Benchmarking Function: {name}...')
+            logger.info(f'Benchmarking Function: {name}...')
 
             # 2. Data Generation
             x_train = bounds[:, 0] + (bounds[:, 1] - bounds[:, 0]) * lhs_design(num_train, dim, iterations=100)
@@ -346,7 +345,7 @@ class Benchmarker:
             dim, bounds = config['dim'], np.array(config['bounds'])
             num_hf, num_lf, num_test = config['num_hf'], config['num_lf'], config['num_test']
 
-            E.logger.info(f'Benchmarking MF Function: {name}...')
+            logger.info(f'Benchmarking MF Function: {name}...')
 
             # 2. Data Generation
             x_hf = bounds[:, 0] + (bounds[:, 1] - bounds[:, 0]) * lhs_design(num_hf, dim, iterations=100)
@@ -398,7 +397,7 @@ class Benchmarker:
 # Main Execution
 # =====================================================================
 if __name__ == "__main__":
-    E.seed_everything(42)
+    seed_everything(42)
     bf = BenchmarkFunctions()
     benchmarker = Benchmarker()
 
@@ -550,10 +549,10 @@ if __name__ == "__main__":
         }
     ]
 
-    E.logger.info('Task 1: Benchmarking hybrid surrogate models...')
+    logger.info(f'{sl.b}Task 1: Benchmarking hybrid surrogate models...{sl.q}')
     benchmarker.bench_hybrid(task1_model_params, task1_test_configs)
 
-    E.logger.info('Task 2: Benchmarking multi-fidelity surrogate models...')
+    logger.info(f'{sl.b}Task 2: Benchmarking multi-fidelity surrogate models...{sl.q}')
     benchmarker.bench_multi_fidelity(task2_model_params, task2_test_configs)
 
-    E.logger.info('Benchmarking Complete. Results saved to root directory')
+    logger.info(f'{sl.b}Benchmarking Complete. Results saved to root directory{sl.q}')

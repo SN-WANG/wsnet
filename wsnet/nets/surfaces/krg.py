@@ -16,7 +16,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-import wsnet.utils.Engine as E
+from wsnet.utils import sl, logger
 
 
 class KRG:
@@ -730,7 +730,7 @@ class KRG:
         else:
             bounds = None
 
-        E.logger.info(f'Training KRG (Poly: {self.poly_name}, Kernel: {self.kernel_name})...')
+        logger.info(f'{sl.g}training KRG (Poly: {self.poly_name}, Kernel: {self.kernel_name})...{sl.q}')
 
         # 4. Optimization: Minimize the joint negative concentrated log-likelihood
         res = minimize(fun=self._objective_function, x0=theta_initial, args=(x_scaled, y_scaled, D),
@@ -750,7 +750,7 @@ class KRG:
         self.G = final_fit['G']
         self.Ft = final_fit['Ft']
 
-        E.logger.info(f'KRG training completed.')
+        logger.info(f'{sl.g}KRG training completed.{sl.q}')
 
     def predict(self, x_test: np.ndarray, y_test: Optional[np.ndarray] = None
                 ) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray, Dict[str, float]]]:
@@ -785,7 +785,7 @@ class KRG:
         x_test_scaled = self.scaler_x.transform(x_test)
 
         # 2. Perform predictions: loop over test points
-        E.logger.info(f'Predicting KRG (Poly: {self.poly_name}, Kernel: {self.kernel_name})...')
+        logger.info(f'{sl.g}predicting KRG (Poly: {self.poly_name}, Kernel: {self.kernel_name})...{sl.q}')
 
         # Nested loop
         # for i in range(num_test):
@@ -867,7 +867,7 @@ class KRG:
         # 5). Calculate mse uncertainty
         mse_pred_scaled = np.outer(mse_factor, self.sigma2)
 
-        E.logger.info(f'KRG prediction completed.')
+        logger.info(f'{sl.g}KRG prediction completed.{sl.q}')
 
         # 3. Unscale predictions (both mean and mse)
         if y_pred_scaled.ndim == 1:
@@ -923,7 +923,7 @@ if __name__ == "__main__":
     y_pred, mse_pred, test_metrics = model.predict(x_test, y_test)
 
     # Log results
-    E.logger.info(f'Uncertainty (Avg tested MSE): {np.mean(mse_pred):.9f}')
-    E.logger.info(f'Testing R2: {test_metrics['r2']:.9f}')
-    E.logger.info(f'Testing MSE: {test_metrics['mse']:.9f}')
-    E.logger.info(f'Testing RMSE: {test_metrics['rmse']:.9f}')
+    logger.info(f'Uncertainty (Avg tested MSE): {sl.m}{np.mean(mse_pred):.9f}{sl.q}')
+    logger.info(f'Testing R2: {sl.m}{test_metrics['r2']:.9f}{sl.q}')
+    logger.info(f'Testing MSE: {sl.m}{test_metrics['mse']:.9f}{sl.q}')
+    logger.info(f'Testing RMSE: {sl.m}{test_metrics['rmse']:.9f}{sl.q}')

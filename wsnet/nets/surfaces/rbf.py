@@ -18,7 +18,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-import wsnet.utils.Engine as E
+from wsnet.utils import sl, logger
 
 
 class RBF:
@@ -109,7 +109,7 @@ class RBF:
         x_scaled = self.scaler_x.fit_transform(x_train)
         y_scaled = self.scaler_y.fit_transform(y_train)
 
-        E.logger.info(f'Training RBF (Centers={self.num_centers}, Gamma={self.gamma})...')
+        logger.info(f'{sl.g}training RBF (Centers={self.num_centers}, Gamma={self.gamma})...{sl.q}')
 
         # 2. Center Initialization (KMeans)
         num_samples = x_scaled.shape[0]
@@ -138,7 +138,7 @@ class RBF:
         # 4. Model Training
         self.model.fit(phi, y_scaled)
 
-        E.logger.info(f'RBF training completed.')
+        logger.info(f'{sl.g}RBF training completed.{sl.q}')
 
     def predict(self, x_test: np.ndarray, y_test: Optional[np.ndarray] = None
                 ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
@@ -168,7 +168,7 @@ class RBF:
 
         x_test_scaled = self.scaler_x.transform(x_test)
 
-        E.logger.info(f'Predicting RBF (Centers={self.num_centers}, Gamma={self.gamma})...')
+        logger.info(f'{sl.g}predicting RBF (Centers={self.num_centers}, Gamma={self.gamma})...{sl.q}')
 
         # 2. Feature Transformation
         phi_test = self._compute_features(x_test_scaled)
@@ -176,7 +176,7 @@ class RBF:
         # 3. Perform predictions: predict on test points
         y_pred_scaled = self.model.predict(phi_test)
 
-        E.logger.info(f'RBF prediction completed.')
+        logger.info(f'{sl.g}RBF prediction completed.{sl.q}')
 
         # 4. Inverse Scaling: Convert back to original space
         if y_pred_scaled.ndim == 1:
@@ -229,6 +229,6 @@ if __name__ == '__main__':
     y_pred, test_metrics = model.predict(x_test, y_test)
 
     # Log results
-    E.logger.info(f'Testing R2: {test_metrics['r2']:.9f}')
-    E.logger.info(f'Testing MSE: {test_metrics['mse']:.9f}')
-    E.logger.info(f'Testing RMSE: {test_metrics['rmse']:.9f}')
+    logger.info(f'Testing R2: {sl.m}{test_metrics['r2']:.9f}{sl.q}')
+    logger.info(f'Testing MSE: {sl.m}{test_metrics['mse']:.9f}{sl.q}')
+    logger.info(f'Testing RMSE: {sl.m}{test_metrics['rmse']:.9f}{sl.q}')

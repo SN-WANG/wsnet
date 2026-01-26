@@ -12,7 +12,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter
 from torch import Tensor
 from tqdm.auto import tqdm
 
-import wsnet.utils.Engine as E
+from wsnet.utils import sl, logger
 
 
 class ProgressWriterMixin:
@@ -120,7 +120,7 @@ class CFDAnimation:
         anim.save(save_path, writer=self._get_writer(file_format, seq_len, case_name))
 
         plt.close(fig)
-        E.logger.info(f'Sequence animation saved to {save_path}')
+        logger.info(f'sequence animation saved to {save_path}')
 
     def animate_comparison(self, gt: Tensor, pred: Tensor, coords: Tensor, case_name: str, file_format: str = 'mp4'
                         ) -> None:
@@ -190,7 +190,7 @@ class CFDAnimation:
             anim.save(save_path, writer=self._get_writer(file_format, seq_len, case_name))
 
             plt.close(fig)
-            E.logger.info(f'Comparison animation saved to {save_path}')
+            logger.info(f'comparison animation saved to {save_path}')
 
 
 if __name__ == "__main__":

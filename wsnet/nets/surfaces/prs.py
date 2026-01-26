@@ -15,7 +15,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-import wsnet.utils.Engine as E
+from wsnet.utils import sl, logger
 
 
 class PRS:
@@ -75,7 +75,7 @@ class PRS:
         x_scaled = self.scaler_x.fit_transform(x_train)
         y_scaled = self.scaler_y.fit_transform(y_train)
 
-        E.logger.info(f'Training PRS (Degree={self.degree}, Alpha={self.alpha})...')
+        logger.info(f'{sl.g}training PRS (Degree={self.degree}, Alpha={self.alpha})...{sl.q}')
 
         # 2. Feature Transformation: Polynomial expansion
         x_poly = self.poly_trans.fit_transform(x_scaled)
@@ -84,7 +84,7 @@ class PRS:
         self.model.fit(x_poly, y_scaled)
         self.is_fitted = True
 
-        E.logger.info(f'PRS training completed.')
+        logger.info(f'{sl.g}PRS training completed.{sl.q}')
 
     def predict(self, x_test: np.ndarray, y_test: Optional[np.ndarray] = None
                 ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
@@ -118,10 +118,10 @@ class PRS:
         x_poly = self.poly_trans.transform(x_test_scaled)
 
         # 3. Perform predictions: predict on test points
-        E.logger.info(f'Predicting PRS (Degree={self.degree}, Alpha={self.alpha})...')
+        logger.info(f'{sl.g}predicting PRS (Degree={self.degree}, Alpha={self.alpha})...{sl.q}')
         y_pred_scaled = self.model.predict(x_poly)
 
-        E.logger.info(f'PRS prediction completed.')
+        logger.info(f'{sl.g}PRS prediction completed.{sl.q}')
 
         # 4. Inverse Scaling: Convert back to original space
         if y_pred_scaled.ndim == 1:
@@ -174,6 +174,6 @@ if __name__ == '__main__':
     y_pred, test_metrics = model.predict(x_test, y_test)
 
     # Log results
-    E.logger.info(f'Testing R2: {test_metrics['r2']:.9f}')
-    E.logger.info(f'Testing MSE: {test_metrics['mse']:.9f}')
-    E.logger.info(f'Testing RMSE: {test_metrics['rmse']:.9f}')
+    logger.info(f'Testing R2: {sl.m}{test_metrics['r2']:.9f}{sl.q}')
+    logger.info(f'Testing MSE: {sl.m}{test_metrics['mse']:.9f}{sl.q}')
+    logger.info(f'Testing RMSE: {sl.m}{test_metrics['rmse']:.9f}{sl.q}')

@@ -1,4 +1,4 @@
-# Deep Learning Engine
+# Deep learning engine
 # Author: Shengning Wang
 
 import sys
@@ -86,8 +86,8 @@ class SmartLogger:
         handler.setFormatter(formatter)
         return handler
 
-m = SmartLogger()
-logger: logging.Logger = m.logger
+sl = SmartLogger()
+logger: logging.Logger = sl.logger
 
 
 def seed_everything(seed: int = 42) -> None:
@@ -105,7 +105,7 @@ def seed_everything(seed: int = 42) -> None:
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    logger.info(f'global seed set to {m.m}{seed}{m.q}')
+    logger.info(f'global seed set to {sl.m}{seed}{sl.q}')
 
 
 # ======================================================================
@@ -211,7 +211,7 @@ def compute_ar_metrics(gt: Tensor, pred: Tensor, channel_names: List[str]) -> Di
 
 
 # ======================================================================
-# 2. Data Processing & Standardization
+# 3. Data Processing & Standardization
 # ======================================================================
 
 class BaseDataset(Dataset):
@@ -323,7 +323,7 @@ class TensorScaler:
 
 
 # ======================================================================
-# 3. Core Engine: The Base Trainer
+# 4. Core Engine: The Base Trainer
 # ======================================================================
 
 class BaseTrainer:
@@ -449,7 +449,7 @@ class BaseTrainer:
         """
         Main training loop.
         """
-        logger.info(f'start training on {m.m}{self.device}{m.q}')
+        logger.info(f'start training on {sl.m}{self.device}{sl.q}')
         start_time = time.time()
         patience_counter = 0
 
@@ -471,11 +471,11 @@ class BaseTrainer:
             # check best model
             is_best = val_loss and val_loss < self.best_loss
             if is_best:
-                val_str = f" | val loss: {m.m}{val_loss:.4e} {m.y}(best){m.q}"
+                val_str = f" | val loss: {sl.m}{val_loss:.4e} {sl.y}(best){sl.q}"
                 self.best_loss = val_loss
                 patience_counter = 0
             else:
-                val_str = f" | val loss: {m.m}{val_loss:.4e}{m.q}" if val_loss else ""
+                val_str = f" | val loss: {sl.m}{val_loss:.4e}{sl.q}" if val_loss else ""
                 patience_counter += 1
 
             # save checkpoint
@@ -483,25 +483,25 @@ class BaseTrainer:
 
             # log info
             duration = time.time() - ep_start
-            logger.info(f'epoch {m.b}{self.current_epoch:03d}{m.q} | time: {m.c}{duration:.1f}s{m.q} '
-                        f'| train loss: {m.m}{train_loss:.4e}{m.q}{val_str}')
+            logger.info(f'epoch {sl.b}{self.current_epoch:03d}{sl.q} | time: {sl.c}{duration:.1f}s{sl.q} '
+                        f'| train loss: {sl.m}{train_loss:.4e}{sl.q}{val_str}')
             self.history.append({'epoch': self.current_epoch, 'train_loss': train_loss,
                                  'val_loss': val_loss, 'lr': self.optimizer.param_groups[0]['lr']})
 
             # early stop
             if patience_counter >= self.patience:
-                logger.info(f'early stopping triggered at epoch {m.m}{self.current_epoch}{m.q}')
+                logger.info(f'early stopping triggered at epoch {sl.m}{self.current_epoch}{sl.q}')
                 break
 
         # save history
         with open(self.output_dir / "history.json", "w") as f:
             json.dump(self.history, f, indent=2)
 
-        logger.info(f"{m.g}training finished in {time.time() - start_time:.1f}s{m.q}")
+        logger.info(f"{sl.g}training finished in {time.time() - start_time:.1f}s{sl.q}")
 
 
 # ======================================================================
-# 4. Concrete Implementations
+# 5. Concrete Implementations
 # ======================================================================
 
 class SupervisedTrainer(BaseTrainer):
@@ -616,9 +616,9 @@ class AutoregressiveTrainer(BaseTrainer):
                 self.current_noise_std *= self.noise_decay
                 self.stable_epochs_counter = 0
                 self.prev_val_loss = float("inf")
-                logger.info(f"{m.y}curriculum update:{m.q} "
-                            f"steps = {m.m}{self.current_rollout_steps}{m.q}, "
-                            f"noise = {m.m}{self.current_noise_std:.4f}{m.q}")
+                logger.info(f"{sl.y}curriculum update:{sl.q} "
+                            f"steps = {sl.m}{self.current_rollout_steps}{sl.q}, "
+                            f"noise = {sl.m}{self.current_noise_std:.4f}{sl.q}")
 
     def _on_epoch_end(self, val_loss: float) -> None:
         """

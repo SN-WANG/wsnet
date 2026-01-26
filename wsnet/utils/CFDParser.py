@@ -12,7 +12,7 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 
-import wsnet.utils.Engine as E
+from wsnet.utils import sl, logger
 
 
 def find_case_dirs(data_dir: Union[str, Path], prefix: str = 'case') -> List[str]:
@@ -84,9 +84,9 @@ class CFDataset(Dataset):
         self.sequences: List[Tensor] = []  # List of (seq_len, num_nodes, in_channels)
         self.coords: List[Tensor] = []  # List of (num_nodes, spatial_dim)
 
-        E.logger.info(f'Initializing dataset with {len(case_list)} cases...')
+        logger.info(f'initializing dataset with {sl.m}{len(case_list)}{sl.q} cases...')
 
-        for case_name in tqdm(self.case_list, desc='Loading Cases', leave=False):
+        for case_name in tqdm(self.case_list, desc='loading cases', leave=False, dynamic_ncols=True):
             # Define cache path
             cache_path = self.processed_dir / f'{case_name}.pt'
 
@@ -108,13 +108,13 @@ class CFDataset(Dataset):
 
                     # 1. Temporal equidistant downsampling (seq_len)
                     if curr_seq_len > max_seq_len:
-                        E.logger.info(f'Subsampling sequence length to {max_seq_len}...')
+                        logger.info(f'subsampling sequence length to {sl.m}{max_seq_len}{sl.q}...')
                         t_indices = torch.linspace(0, curr_seq_len - 1, max_seq_len).long()
                         seq_tensor = torch.index_select(seq_tensor, 0, t_indices)
 
                     # 2. Spatial equidistant downsampling (num_nodes)
                     if curr_nodes > max_nodes:
-                        E.logger.info(f'Subsampling nodes number to {max_nodes}...')
+                        logger.info(f'subsampling nodes number to {sl.m}{max_nodes}{sl.q}...')
                         s_indices = torch.linspace(0, curr_nodes - 1, max_nodes).long()
                         seq_tensor = torch.index_select(seq_tensor, 1, s_indices)
                         coords_tensor = torch.index_select(coords_tensor, 0, s_indices)
@@ -122,10 +122,10 @@ class CFDataset(Dataset):
                 self.sequences.append(seq_tensor)
                 self.coords.append(coords_tensor)
 
-        E.logger.info(f'Dataset initialized. Cases: {len(self.sequences)}, '
-                      f'Frames: {self.sequences[0].shape[0]}, '
-                      f'Nodes: {self.sequences[0].shape[1]}, '
-                      f'Channels: {self.sequences[0].shape[2]}')
+        logger.info(f'{sl.g}dataset initialized.{sl.q} cases: {sl.m}{len(self.sequences)}{sl.q}, '
+                      f'frames: {sl.m}{self.sequences[0].shape[0]}{sl.q}, '
+                      f'nodes: {sl.m}{self.sequences[0].shape[1]}{sl.q}, '
+                      f'channels: {sl.m}{self.sequences[0].shape[2]}{sl.q}')
 
     def _parse_case_sequence(self, case_name: str, save_path: Path) -> Optional[Dict[str, Tensor]]:
         """
@@ -230,10 +230,10 @@ class CFDataset(Dataset):
             seq_win: List[Tensor] = []
             coords_win: List[Tensor] = []
 
-            E.logger.info(f'Starting data augmentation for {split_name} split...')
+            logger.info(f'starting data augmentation for {sl.m}{split_name}{sl.q} split...')
 
             pbar = tqdm(zip(dataset.sequences, dataset.coords), total=len(dataset.sequences),
-                        desc=f'Augmenting {split_name} (Windows)', leave=False)
+                        desc=f'augmenting {split_name} (windows)', leave=False, dynamic_ncols=True)
 
             for seq, coords in pbar:
 
@@ -256,8 +256,8 @@ class CFDataset(Dataset):
             dataset.sequences = list(dataset.sequences)
             dataset.coords = list(dataset.coords)
 
-            E.logger.info(f'Augmentation complete for {split_name}. '
-                          f'Batch: {len(dataset)}, Length: {dataset.sequences[0].shape[0]}')
+            logger.info(f'augmentation complete for {split_name}. '
+                          f'batch: {sl.m}{len(dataset)}{sl.q}, length: {sl.m}{dataset.sequences[0].shape[0]}{sl.q}')
 
         # Process train data and val data
         create_windows(train_data, 'train')

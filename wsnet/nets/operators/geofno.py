@@ -1,12 +1,11 @@
 # Geometry-aware Fourier Neural Operator (Geo-FNO)
 # Author: Shengning Wang
 
-from typing import List, Dict, Any, Optional, Callable, Union, Tuple
-
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 from tqdm.auto import tqdm
+from typing import List, Dict, Optional
 
 # ============================================================
 # Deformation Network (Coordinate Mapping)
@@ -459,7 +458,7 @@ class GeoFNO(nn.Module):
         seq: List[Tensor] = [current_state.cpu()]
 
         with torch.no_grad():
-            for _ in tqdm(range(steps), desc='Predicting', leave=False):
+            for _ in tqdm(range(steps), desc='Predicting', leave=False, dynamic_ncols=True):
                 # Forward pass: state_t -> state_{t+1}
                 next_state = self.forward(current_state, coords)
 
