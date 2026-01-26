@@ -1,6 +1,7 @@
 # Deep Learning Engine
 # Author: Shengning Wang
 
+import sys
 import json
 import time
 import random
@@ -11,43 +12,82 @@ from typing import List, Dict, Any, Optional, Callable, Union, Tuple
 import numpy as np
 import torch
 from torch import nn, Tensor
-import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from torch.optim import Optimizer, Adam, lr_scheduler
+from torch.optim import Optimizer, Adam, AdamW
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, _LRScheduler
 from tqdm.auto import tqdm
 
 
 # ======================================================================
-# 1. Utilities & Reproducibility
+# 1. Logger & Seed Setter
 # ======================================================================
 
-# Config Logging
-# logging.basicConfig(
-#     format='%(asctime)s - %(levelname)s - %(message)s',
-#     datefmt='%H:%M:%S',
-#     level=logging.INFO
-# )
-# logger = logging.getLogger(__name__)
+class SmartLogger:
+    """
+    A thread-safe logging utility synchronized with tqdm progress bars.
 
-class TqdmLoggingHandler(logging.Handler):
-    def __init__(self, level=logging.NOTSET):
-        super().__init__(level)
+    This class manages a specialized logging handler that prevents log messages 
+    from breaking tqdm progress bar rendering by using tqdm.write(). It ensures 
+    idempotency by clearing existing handlers on the logger instance, which is 
+    critical when re-initializing experiments in interactive environments.
 
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            tqdm.write(msg)
-            self.flush()
-        except Exception:
-            self.handleError(record)
+    Attributes:
+        logger (logging.Logger): The configured logger instance.
+    """
 
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%H:%M:%S')
-tqdm_handler = TqdmLoggingHandler()
-tqdm_handler.setFormatter(formatter)
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-logger.addHandler(tqdm_handler)
-logger.propagate = False
+    # ANSI Color Codes
+    b = "\033[1;34m"    # major key/parameter:      bold blue
+    c = "\033[1;36m"    # minor key/parameter:      bold cyan
+    m = "\033[1;35m"    # value/reading:            bold magenta
+    y = "\033[1;33m"    # warning/highlighting:     bold yellow
+    g = "\033[1;32m"    # success/save:             bold green
+    r = "\033[1;31m"    # error/critical:           bold red
+
+    q = "\033[0m"      # quit/reset
+
+    def __init__(self, name: str = __name__, level: int = logging.INFO) -> None:
+        """
+        Initializes the SmartLogger with a tqdm-compatible stream handler.
+
+        Args:
+            name (str): The name of the logger, typically __name__.
+            level (int): Logging level (e.g., logging.INFO, logging.DEBUG).
+        """
+        self.logger: logging.Logger = logging.getLogger(name)
+        self.logger.setLevel(level)
+
+        # disable propagation to prevent duplicate logs from the root logger
+        self.logger.propagate = False
+
+        # check for existing handlers to avoid redundant log outputs in singleton logger
+        if self.logger.hasHandlers():
+            self.logger.handlers.clear()
+
+        tqdm_handler: logging.StreamHandler = self._get_tqdm_handler()
+        self.logger.addHandler(tqdm_handler)
+
+    def _get_tqdm_handler(self) -> logging.StreamHandler:
+        """
+        Constructs a StreamHandler that routes messages through tqdm.write.
+
+        Returns:
+            logging.StreamHandler: Configured handler with ANSI color support.
+        """
+        # define color-coded format for enhanced visibility in terminal, Green for timestamp, Blue for levelname
+        log_format: str = f"\033[90m%(asctime)s{self.q} - {self.b}%(levelname)s{self.q} - %(message)s"
+        formatter: logging.Formatter = logging.Formatter(log_format, "%H:%M:%S")
+
+        # direct stream to stdout
+        handler: logging.StreamHandler = logging.StreamHandler(sys.stdout)
+
+        # override emit to use tqdm.write, ensuring logs appear above progress bars
+        handler.emit = lambda record: tqdm.write(formatter.format(record))
+
+        handler.setFormatter(formatter)
+        return handler
+
+m = SmartLogger()
+logger: logging.Logger = m.logger
 
 
 def seed_everything(seed: int = 42) -> None:
@@ -55,7 +95,7 @@ def seed_everything(seed: int = 42) -> None:
     Sets the seed for generating random numbers to ensure reproducibility.
 
     Args:
-    - seed (int): The seed value
+        seed (int): The seed value.
     """
     random.seed(seed)
     np.random.seed(seed)
@@ -65,11 +105,113 @@ def seed_everything(seed: int = 42) -> None:
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    logger.info(f'Global seed set to {seed}')
+    logger.info(f'global seed set to {m.m}{seed}{m.q}')
 
 
 # ======================================================================
-# 2. Data Processing & Normalization
+# 2. Metrics & Loss Functions
+# ======================================================================
+
+class NMSELoss(nn.Module):
+    """
+    Normalized Mean Squared Error Loss.
+    L = ||y - pred||^2 / (||y||^2 + epsilon)
+    """
+    def __init__(self, eps: float = 1e-8):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, pred: Tensor, target: Tensor) -> Tensor:
+        """
+        Args:
+            pred (Tensor): Prediction. Shape (batch_size, seq_len, num_nodes, num_channels)
+            target (Tensor): Ground truth. Shape (batch_size, seq_len, num_nodes, num_channels)
+
+        Returns:
+            Tensor: Scalar loss.
+        """
+        mse = torch.sum((target - pred) ** 2)
+        norm = torch.sum(target ** 2) + self.eps
+        return mse / norm
+
+
+def compute_ar_metrics(gt: Tensor, pred: Tensor, channel_names: List[str]) -> Dict[str, Any]:
+    """
+    Computes comprehensive autoregressive evaluation metrics.
+
+    Args:
+        gt (Tensor): Ground truth sequence. Shape (batch_size, seq_len, num_nodes, num_channels)
+        pred (Tensor): Predicted sequence. Shape (batch_size, seq_len, num_nodes, num_channels)
+        channel_names (List[str]): List of channel names.
+
+    Returns:
+        Dict[str, Any]: Nested dictionary of metrics per channel and aggregate.
+    """
+    assert gt.shape == pred.shape, "Shape mismatch between GT and Pred"
+    assert gt.shape[-1] == len(channel_names), \
+        f"Channel mismatch: Tensor has {gt.shape[-1]} channels but provided {len(channel_names)} names."
+
+    metrics: Dict[str, Any] = {}
+
+    # 1. Per-Channel Metrics
+    for c, name in enumerate(channel_names):
+        gt_c = gt[..., c]  # (batch_size, seq_len, num_nodes)
+        pred_c = pred[..., c]  # (batch_size, seq_len, num_nodes)
+
+        abs_diff = torch.abs(gt_c - pred_c)
+        sq_diff = (gt_c - pred_c) ** 2
+
+        # 1. Global MAE and MaxErr
+        mae_val = torch.mean(abs_diff).item()
+        max_val = torch.max(abs_diff).item()
+
+        # 2. Global MSE and RMSE
+        mse_val = torch.mean(sq_diff).item()
+        rmse_val = np.sqrt(mse_val)
+
+        # 3. Global R2 and NMSE
+        ss_res = torch.sum(sq_diff).item()
+        ss_tot = torch.sum((gt_c - torch.mean(gt_c)) ** 2).item()
+        r2_val = 1.0 - (ss_res / (ss_tot + 1e-8))
+        nmse_val = mse_val / (torch.mean(gt_c ** 2).item() + 1e-8)
+
+        # 4. Global Gradient NMSE (Smoothness check)
+        grad_gt_c = gt_c[:, 1:, :] - gt_c[:, :-1, :]
+        grad_pred_c = pred_c[:, 1:, :] - pred_c[:, :-1, :]
+        grad_mse = torch.mean((grad_gt_c - grad_pred_c) ** 2)
+        grad_nmse = (grad_mse / (torch.mean(grad_gt_c ** 2) + 1e-8)).item()
+
+        # 5. Step-wise MAE and MaxErr
+        step_mae = torch.mean(abs_diff, dim=(0, 2))
+        step_max = torch.max(abs_diff, dim=(0, 2)).values
+
+        # 6. Step-wise MSE and RMSE
+        step_mse = torch.mean(sq_diff, dim=(0, 2))
+        step_rmse = torch.sqrt(step_mse)
+
+        # 7. Step-wise R2 and NMSE
+        step_ss_res = torch.sum(sq_diff, dim=(0, 2))
+        step_ss_tot = torch.sum((gt_c - torch.mean(gt_c, dim=(0, 2), keepdim=True)) ** 2, dim=(0, 2))
+        step_r2 = (1.0 - (step_ss_res / (step_ss_tot + 1e-8)))
+        step_nmse = step_mse / (torch.mean(gt_c ** 2, dim=(0, 2)) + 1e-8)
+
+        metrics[name] = {
+            "NMSE": nmse_val,
+            "R2": r2_val,
+            "MSE": mse_val,
+            "RMSE": rmse_val,
+            "MAE": mae_val,
+            "MaxErr": max_val,
+            "Grad-NMSE": grad_nmse,
+            "Step-NMSE": step_nmse.tolist(),
+            "Step-R2": step_r2.tolist(),
+        }
+
+    return metrics
+
+
+# ======================================================================
+# 2. Data Processing & Standardization
 # ======================================================================
 
 class BaseDataset(Dataset):
@@ -110,23 +252,23 @@ class TensorScaler:
         Computes the mean and std to be used for later scaling.
 
         Args:
-        - x (Tensor): Data tensor. Shape: (N, ...)
-        - feature_dim (int): The dimension representing features/channels.
-                             Statistics are computed over all OTHER dimensions.
+            x (Tensor): Data tensor. Shape: (N, ...)
+            feature_dim (int): The dimension representing features/channels.
+                               Statistics are computed over all OTHER dimensions.
 
         Returns:
-        - TensorScaler: Self instance for method chaining.
+            TensorScaler: Self instance for method chaining.
         """
-        # Ensure positive index
+        # ensure positive index
         feature_dim = feature_dim % x.ndim
 
-        # Aggregate over all dimensions except the feature dimension
+        # aggregate over all dimensions except the feature dimension
         dims = [d for d in range(x.ndim) if d != feature_dim]
 
         self.mean = x.mean(dim=dims, keepdim=True)
         self.std = x.std(dim=dims, keepdim=True)
 
-        # Handle constant values (std=0) to avoid NaN
+        # handle constant values (std=0) to avoid NaN
         self.std[self.std < 1e-7] = 1.0
         self.device = x.device
 
@@ -137,15 +279,15 @@ class TensorScaler:
         Standardizes input tensor.
 
         Args:
-        - x (Tensor): Data to transform. Shape matches input to fit().
+            x (Tensor): Data to transform. Shape matches input to fit().
 
         Returns:
-        - Tensor: Scaled data.
+            Tensor: Scaled data.
         """
         if self.mean is None or self.std is None:
             raise RuntimeError('Scaler has not been fitted.')
 
-        # Ensure scaler stats are on the same device as input
+        # ensure scaler stats are on the same device as input
         if self.mean.device != x.device:
             self.mean = self.mean.to(x.device)
             self.std = self.std.to(x.device)
@@ -157,15 +299,15 @@ class TensorScaler:
         Scales back the data to the original representation.
 
         Args:
-        - x (Tensor): Scaled data.
+            x (Tensor): Scaled data.
 
         Returns:
-        - Tensor: Original scale data.
+            Tensor: Original scale data.
         """
         if self.mean is None or self.std is None:
             raise RuntimeError('Scaler has not been fitted.')
 
-        # Ensure scaler stats are on the same device as input
+        # ensure scaler stats are on the same device as input
         if self.mean.device != x.device:
             self.mean = self.mean.to(x.device)
             self.std = self.std.to(x.device)
@@ -190,66 +332,64 @@ class BaseTrainer:
     Subclasses must implement 'compute_loss' to define specific task logic.
     """
 
-    def __init__(self, model: nn.Module, output_dir: Optional[Union[str, Path]] = './runs',
-                 optimizer: Optional[Optimizer] = None, scheduler: Optional[lr_scheduler._LRScheduler] = None,
-                 criterion: Optional[nn.Module] = None, scalers: Optional[Dict[str, TensorScaler]] = None,
-                 device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
-                 max_epochs: int = 100, lr: float = 1e-3, patience: int = 10):
+    def __init__(self, model: nn.Module, max_epochs: int = 100, lr: float = 1e-3, patience: int = None,
+                 scalers: Optional[Dict[str, TensorScaler]] = None, output_dir: Optional[Union[str, Path]] = "./runs",
+                 optimizer: Optional[Optimizer] = None, scheduler: Optional[_LRScheduler] = None,
+                 criterion: Optional[nn.Module] = None, device: str = "cuda" if torch.cuda.is_available() else "cpu"):
         """
         Initialize the Trainer.
 
         Args:
-        - model (nn.Module): The neural network.
-        - output_dir (Union[str, Path]): Directory to save artifacts. Defaults to './runs'
-        - optimizer (Optional[Optimizer]): Optimizer instance. Defaults to Adam.
-        - scheduler (Optional[_LRScheduler]): Learning rate scheduler.
-        - criterion (Optional[nn.Module]): Loss function. Default to MSELoss.
-        - scalers (Optional[Dict[str, TensorScaler]]): Dictionary of scalers to save.
-        - device (str): Computation device.
-        - max_epochs (int): Maximum training epochs.
-        - lr (float): Initial learning rate for the optimizer, default 1e-3.
-        - patience (int): Epochs to wait before early stopping if no improvement.
+            model (nn.Module): The neural network.
+            max_epochs (int): Maximum training epochs, defaults to 100.
+            lr (float): Initial learning rate for the optimizer, defaults to 1e-3.
+            patience (int): Epochs to wait before early stopping if no improvement, defaults to max_epochs.
+            scalers (Optional[Dict[str, TensorScaler]]): Dictionary of scalers to save.
+            output_dir (Union[str, Path]): Directory to save artifacts, defaults to "./runs".
+            optimizer (Optional[Optimizer]): Optimizer instance, defaults to Adam.
+            scheduler (Optional[_LRScheduler]): Learning rate scheduler, defaults to None.
+            criterion (Optional[nn.Module]): Loss function, defaults to MSELoss.
+            device (str): Computation device, defaults to "cuda" or "cpu".
         """
         self.device = torch.device(device)
         self.model = model.to(self.device)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.criterion = criterion if criterion else nn.MSELoss()
+        self.scalers =  scalers
         self.optimizer = optimizer if optimizer else Adam(self.model.parameters(), lr=lr)
-        self.scheduler = scheduler if scheduler else lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, factor=0.5, patience=5, min_lr=1e-6)
-        self.scaler_state = {k: v.state_dict() for k, v in scalers.items()} if scalers else None
+        self.scheduler = scheduler
+        self.criterion = criterion if criterion else nn.MSELoss()
 
         self.max_epochs = max_epochs
-        self.patience = patience
+        self.patience = patience if patience else max_epochs
         self.current_epoch = 0
         self.best_loss = float('inf')
         self.history: List[Dict[str, Any]] = []
 
-    def compute_loss(self, batch: Any) -> Tensor:
+    def _compute_loss(self, batch: Any) -> Tensor:
         """
         Abstract method: Calculate the loss for a single batch.
         Must be implemented by subclasses.
 
         Args:
-        - batch (Any): Data batch from DataLoader.
+            batch (Any): Data batch from DataLoader.
 
         Returns:
-        - Tensor: Scalar loss tensor (Attached to graph). Shape: (1,)
+            Tensor: Scalar loss tensor (Attached to graph). Shape: (1,)
         """
-        raise NotImplementedError('Subclasses must implement compute_loss.')
+        raise NotImplementedError('Subclasses must implement _compute_loss.')
 
     def _run_epoch(self, loader: DataLoader, is_training: bool) -> float:
         """
         Runs a single epoch of training or validation.
 
         Args:
-        - loader (DataLoader): The data loader.
-        - is_training (bool): Whether gradients should be computed.
+            loader (DataLoader): The data loader.
+            is_training (bool): Whether gradients should be computed.
 
         Returns:
-        - float: Average loss for the epoch.
+            float: Average loss for the epoch.
         """
         self.model.train(is_training)
         losses = []
@@ -257,69 +397,59 @@ class BaseTrainer:
         context = torch.enable_grad() if is_training else torch.no_grad()
 
         with context:
-            pbar = tqdm(loader, desc='Training' if is_training else 'Validating', leave=False)
+            pbar = tqdm(loader, desc="Training" if is_training else "Validating", leave=False, dynamic_ncols=True)
             for batch in pbar:
-                # Move batch to device (handling lists/tuples generic logic)
+                # move batch to device (handling lists/tuples generic logic)
                 if isinstance(batch, (list, tuple)):
                     batch = [b.to(self.device) if isinstance(b, Tensor) else b for b in batch]
                 elif isinstance(batch, dict):
                     batch = {k: v.to(self.device) if isinstance(v, Tensor) else v for k, v in batch.items()}
 
-                loss = self.compute_loss(batch)
+                loss = self._compute_loss(batch)
 
                 if is_training:
                     self.optimizer.zero_grad(set_to_none=True)
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)  # Gradient Clipping
                     self.optimizer.step()
 
                 loss_val = loss.item()
                 losses.append(loss_val)
-                pbar.set_postfix({'loss': f'{loss_val:.4e}'})
+                pbar.set_postfix({"loss": f"{loss_val:.4e}"})
 
         return float(np.mean(losses))
 
-    def save_checkpoint(self, val_loss: float, is_best: bool = False) -> None:
-        """Save the training state."""
+    def _on_epoch_end(self, **kwargs) -> None:
+        """
+        Optional hook called at the end of each epoch.
+        Default implementation is a no-op.
+        """
+        pass
+
+    def _save_checkpoint(self, val_loss: float, is_best: bool = False, extra_state: Dict = {}) -> None:
+        """
+        Save the training state.
+        """
         state = {
-            'epoch': self.current_epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'val_loss': val_loss,
-            'scaler_state': getattr(self, 'scaler_state', None)
+            "epoch": self.current_epoch,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "val_loss": val_loss,
+            **extra_state
         }
+        if self.scalers:
+            state["scaler_state_dict"] = {k: v.state_dict() for k, v in self.scalers.items()}
         if self.scheduler:
-            state['scheduler_state_dict'] = self.scheduler.state_dict()
+            state["scheduler_state_dict"] = self.scheduler.state_dict()
 
-        # Save generic 'last' checkpoint
-        torch.save(state, self.output_dir / f'ckpt.pt')
-
+        torch.save(state, self.output_dir / "ckpt.pt")
         if is_best:
-            torch.save(state, self.output_dir / 'model.pt')
-            logger.info(f'New best model saved at epoch {self.current_epoch} with loss {val_loss:.4e}')
-
-    def load_checkpoint(self, path: Union[str, Path]) -> None:
-        """Resumes training from a checkpoint."""
-        path = Path(path)
-        if not path.exists():
-            raise FileNotFoundError(f'Checkpoint not found at {path}')
-
-        checkpoint = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-
-        if self.scheduler and 'scheduler_state_dict' in checkpoint:
-            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-
-        self.current_epoch = checkpoint['epoch'] + 1
-        self.best_loss = checkpoint.get('val_loss', float('inf'))
-        logger.info(f'Resumed from epoch {self.current_epoch}, best loss: {self.best_loss:.4e}')
+            torch.save(state, self.output_dir / "best.pt")
 
     def fit(self, train_loader: DataLoader, val_loader: Optional[DataLoader] = None) -> None:
         """
         Main training loop.
         """
-        logger.info(f'Starting training on {self.device} for {self.max_epochs} epochs.')
+        logger.info(f'start training on {m.m}{self.device}{m.q}')
         start_time = time.time()
         patience_counter = 0
 
@@ -327,49 +457,47 @@ class BaseTrainer:
             self.current_epoch = epoch + 1
             ep_start = time.time()
 
-            # Training
+            # train & validate
             train_loss = self._run_epoch(train_loader, is_training=True)
+            val_loss = self._run_epoch(val_loader, is_training=False) if val_loader else None
 
-            # Validation
-            val_loss = None
-            val_str = ''
-            if val_loader:
-                val_loss = self._run_epoch(val_loader, is_training=False)
-                val_str = f' | Val Loss: {val_loss:.4e}'
+            # call hook function
+            self._on_epoch_end(val_loss)
 
-                if self.scheduler:
-                    if isinstance(self.scheduler, lr_scheduler.ReduceLROnPlateau):
-                        self.scheduler.step(val_loss)
-                    else:
-                        self.scheduler.step()
+            # scheduler step
+            if self.scheduler:
+                self.scheduler.step()
 
-                # Checkpointing logic
-                is_best = val_loss < self.best_loss
-                if is_best:
-                    self.best_loss = val_loss
-                    patience_counter = 0
-                    self.save_checkpoint(val_loss, is_best=True)
-                else:
-                    patience_counter += 1
-                    self.save_checkpoint(val_loss, is_best=False)
+            # check best model
+            is_best = val_loss and val_loss < self.best_loss
+            if is_best:
+                val_str = f" | val loss: {m.m}{val_loss:.4e} {m.y}(best){m.q}"
+                self.best_loss = val_loss
+                patience_counter = 0
+            else:
+                val_str = f" | val loss: {m.m}{val_loss:.4e}{m.q}" if val_loss else ""
+                patience_counter += 1
 
-                if patience_counter >= self.patience:
-                    logger.info(f'Early stopping triggered at epoch {self.current_epoch}')
-                    break
+            # save checkpoint
+            self._save_checkpoint(val_loss, is_best)
 
-            # Logging
+            # log info
             duration = time.time() - ep_start
-            logger.info(f'Epoch {self.current_epoch:03d} | Time: {duration:.1f}s '
-                        f'| Train Loss: {train_loss:.4e}{val_str}')
-
+            logger.info(f'epoch {m.b}{self.current_epoch:03d}{m.q} | time: {m.c}{duration:.1f}s{m.q} '
+                        f'| train loss: {m.m}{train_loss:.4e}{m.q}{val_str}')
             self.history.append({'epoch': self.current_epoch, 'train_loss': train_loss,
                                  'val_loss': val_loss, 'lr': self.optimizer.param_groups[0]['lr']})
 
-        # Save History
-        with open(self.output_dir / 'history.json', 'w') as f:
+            # early stop
+            if patience_counter >= self.patience:
+                logger.info(f'early stopping triggered at epoch {m.m}{self.current_epoch}{m.q}')
+                break
+
+        # save history
+        with open(self.output_dir / "history.json", "w") as f:
             json.dump(self.history, f, indent=2)
 
-        logger.info(f'Training finished in {time.time() - start_time:.1f}s.')
+        logger.info(f"{m.g}training finished in {time.time() - start_time:.1f}s{m.q}")
 
 
 # ======================================================================
@@ -380,7 +508,7 @@ class SupervisedTrainer(BaseTrainer):
     """
     Standard Trainer for mapping X -> Y (One-to-One).
     """
-    def compute_loss(self, batch: Tuple[Tensor, Tensor]) -> Tensor:
+    def _compute_loss(self, batch: Tuple[Tensor, Tensor]) -> Tensor:
         inputs, targets = batch
         preds = self.model(inputs)
         return self.criterion(preds, targets)
@@ -393,48 +521,126 @@ class AutoregressiveTrainer(BaseTrainer):
 
     Key features:
     1. Multi-step pushforward: Unrolls the model for k steps during training.
-    2. Curriculum schedule: Dynamically adjusts rollout length during training.
-    3. Noise injection: Adds Gaussian noise to inputs to improve stability.
-    4. Sobolev Loss: Adds spatial gradient penalty.
+    2. Noise injection: Adds Gaussian noise to inputs to improve stability.
+    3. Curriculum schedule: Dynamically adjusts rollout steps and noise deviation during training.
+
+    Configs:
+    1. Default optimizer: AdamW
+    2. Default scheduler: CosineAnnealingWarmRestarts
+    3. Default criterion: NMSE + Sobolev Gradient Penalty
+    4. Default curriculum: Adapts rollout steps and noise deviation based on val loss stability
     """
 
-    def __init__(self, model: nn.Module, pushforward_steps: int = 5,
-                 curriculum_schedule: Optional[Callable[[int], int]] = None,
-                 noise_std: float = 0.0, sobolev_beta: float = 0.1, **kwargs):
+    def __init__(self, model: nn.Module,
+                 # optimization params
+                 lr: float = 1e-3, weight_decay: float = 1e-5,
+                 scheduler_t0: int = 50, scheduler_t_mult: int = 2, eta_min: float = 1e-6,
+                 # curriculum params
+                 max_rollout_steps: int = 5, curr_patience: int = 10, curr_sensitivity: float = 0.01,
+                 noise_std_init: float = 0.05, noise_decay: float = 0.9, sobolev_beta: float = 0.1,
+                 # base params
+                 **kwargs):
         """
         Args:
-        - model (nn.Module): The neural network.
-        - pushforward_steps (int): The number of autoregressive steps to unroll during training.
-                                   If curriculum_schedule is provided, this is the maximum steps.
-        - curriculum_schedule (Optional[Callable[[int], int]]): A function mapping epoch -> steps.
-        - noise_std (float): Standard deviation of Gaussian noise added to inputs during training.
-        - sobolev_beta (float): Weight for the spatial gradient penalty.
-        - **kwargs: Arguments passed to BaseTrainer (optimizer, criterion, etc.).
+            model (nn.Module): The neural network.
+            lr, weight_decay: AdamW parameters.
+            scheduler_t0, scheduler_t_mult, eta_min: CosineAnnealingWarmRestarts parameters.
+            max_rollout_steps (int): Max steps for autoregressive rollout.
+            curr_patience (int): Epochs of stable loss to trigger curriculum advance.
+            curr_sensitivity (float): Threshold for loss improvement.
+            noise_std_init (float): Initial noise injection std dev.
+            noise_decay (float): Multiplier for noise when curriculum advances.
+            sobolev_beta (float): Weight for gradient NMSE term in loss.
+            **kwargs: Arguments passed to BaseTrainer.
         """
-        super().__init__(model, **kwargs)
-        self.pushforward_steps = pushforward_steps
-        self.curriculum_schedule = curriculum_schedule
-        self.noise_std = noise_std
+
+        # 1. Initialize BaseTrainer with defaults
+        optimizer = kwargs.pop('optimizer', None)
+        scheduler = kwargs.pop('scheduler', None)
+        criterion = kwargs.pop('criterion', None)
+
+        # default optimizer: AdamW
+        if optimizer is None:
+            optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+        # default scheduler: CosineAnnealingWarmRestarts
+        if scheduler is None:
+            scheduler = CosineAnnealingWarmRestarts(
+                optimizer, T_0=scheduler_t0, T_mult=scheduler_t_mult, eta_min=eta_min
+            )
+
+        # default criterion: NMSE
+        if criterion is None:
+            criterion = NMSELoss()
+
+        super().__init__(model, optimizer=optimizer, scheduler=scheduler, criterion=criterion, **kwargs)
+
+        # 2. Store hyperparameters
+        self.max_rollout_steps = max_rollout_steps
+        self.curr_patience = curr_patience
+        self.curr_sensitivity = curr_sensitivity
+        self.noise_std_init = noise_std_init
+        self.noise_decay = noise_decay
         self.sobolev_beta = sobolev_beta
 
-    def _get_current_steps(self) -> int:
-        """Determines the number of rollout steps for the current epoch."""
-        if self.curriculum_schedule:
-            steps = self.curriculum_schedule(self.current_epoch)
-            return max(1, min(steps, self.pushforward_steps))
-        return self.pushforward_steps
+        # 3. Initialize curriculum state
+        self.current_rollout_steps = 1
+        self.current_noise_std = noise_std_init
+        self.stable_epochs_counter = 0
+        self.prev_val_loss = float("inf")
 
-    def compute_loss(self, batch: Any) -> Tensor:
+    def _update_curriculum(self, val_loss: float) -> None:
+        """
+        Update curriculum state based on validation loss trajectory.
+        Strategy: If loss stablizes, we increase difficulty (steps) and decrease assistance (noise).
+        """
+
+        # calculate relative improvement
+        if self.prev_val_loss > 1e-9:
+            rel_improv = (self.prev_val_loss - val_loss) / self.prev_val_loss
+        else:
+            rel_improv = 0.0
+
+        self.prev_val_loss = val_loss
+
+        is_stable = rel_improv < self.curr_sensitivity and val_loss < 1.0
+        if is_stable:
+            self.stable_epochs_counter += 1
+        else:
+            self.stable_epochs_counter = 0
+
+        # trigger advance
+        if self.stable_epochs_counter >= self.curr_patience:
+            if self.current_rollout_steps < self.max_rollout_steps:
+                self.current_rollout_steps += 1
+                self.current_noise_std *= self.noise_decay
+                self.stable_epochs_counter = 0
+                self.prev_val_loss = float("inf")
+                logger.info(f"{m.y}curriculum update:{m.q} "
+                            f"steps = {m.m}{self.current_rollout_steps}{m.q}, "
+                            f"noise = {m.m}{self.current_noise_std:.4f}{m.q}")
+
+    def _on_epoch_end(self, val_loss: float) -> None:
+        """
+        Updates the curriculum parameters based on validation loss at the end of each epoch.
+
+        Args:
+            val_loss (float): Validation loss from the current epoch.
+        """
+        self._update_curriculum(val_loss)
+
+    def _compute_loss(self, batch: Any) -> Tensor:
         """
         Computes the pushforward rollout loss with noise injection.
 
         Steps:
-        1. Initialize state x_0
-        2. For t = 0 to k:
-            a. Inject noise: tilde_x_t = x_t + epsilon
-            b. Predict: hat_x_t+1 = f(tilde_x_t)
-            c. Compute Sobolev loss: L_t = loss(hat_x_t+1, gt_x_t+1) + beta * loss(grad(hat_x_t+1), grad(gt_x_t+1))
-            d. Update state: x_t+1 = hat_x_t+1
+        1. parse augumented "super batch"
+        2. initialize state x_0
+        3. inject noise: tilde_x_0 = x_0 + epsilon
+        4. pushforward rollout:
+            a. predict: hat_x_t+1 = f(tilde_x_t)
+            b. compute Sobolev loss: L_t = loss(hat_x_t+1, gt_x_t+1) + beta * loss(grad(hat_x_t+1), grad(gt_x_t+1))
+            c. update state: x_t+1 = hat_x_t+1
 
         Args:
         - batch (Any): Data batch containing sequence and optionally coords.
@@ -444,196 +650,37 @@ class AutoregressiveTrainer(BaseTrainer):
         Returns:
         - Tensor: Scalar loss averaged over rollout steps. Shape (1,)
         """
-        # 1. Determine rollout horizon (Curriculum schedule)
-        rollout_steps = self._get_current_steps()
 
-        # 2. Parse the "super batch"
-        # seq_window shape: (batch_size * win_size, win_len, num_nodes, num_channels)
-        # coords_window shape: (batch_size * win_size, num_nodes, spatial_dim)
+        # 1. parse augumented "super batch"
         seq_window, coords_window = batch
 
-        # 3. Autoregressive Unrolling
+        # 2. intialize state x_0
         input_state = seq_window[:, 0]  # t = 0
         loss = torch.tensor(0.0, device=self.device)
 
-        # A. Noise injection
-        if self.model.training and self.noise_std > 0:
-            noise = torch.rand_like(input_state) * self.noise_std
-            input_state = input_state + noise
+        # 2. noise injection
+        if self.model.training and self.current_noise_std > 1e-6:
+            input_state = input_state + torch.rand_like(input_state) * self.current_noise_std
 
-        for t in range(rollout_steps):
-            # B. Forward pass
+        # 3. pushforward rollout
+        for t in range(self.current_rollout_steps):
+            # a. forward pass
             if coords_window is not None:
                 pred_state = self.model(input_state, coords_window)
             else:
                 pred_state = self.model(input_state)
 
-            # C. Compute step Sobolev loss
+            # b. compute step Sobolev loss
             target_state = seq_window[:, t + 1]
             pred_grad = pred_state[:, 1:, :] - pred_state[:, :-1, :]
             target_grad = target_state[:, 1:, :] - target_state[:, :-1, :]
 
-            primary_loss = self.criterion(pred_state, target_state)
-            penalty_loss = self.criterion(pred_grad, target_grad)
+            state_loss = self.criterion(pred_state, target_state)
+            grad_loss = self.criterion(pred_grad, target_grad)
 
-            loss += (primary_loss + self.sobolev_beta * penalty_loss)
+            loss += (state_loss + self.sobolev_beta * grad_loss)
 
-            # D. Pushforward
+            # c. update state
             input_state = pred_state
 
-        return loss / rollout_steps
-
-
-# ======================================================================
-# 5. Example Usage
-# ======================================================================
-
-class SimpleMLP(nn.Module):
-    """
-    A simple Multi-Layer Perceptron for demonstration purposes.
-    Includes a dedicated prediction method for inference.
-    """
-    def __init__(self, in_dim: int, out_dim: int, hidden_dim: int = 64):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, out_dim)
-        )
-
-    def forward(self, x: Tensor) -> Tensor:
-        return self.net(x)
-
-    def predict(self, inputs: Tensor) -> Tensor:
-        """
-        Performs inference on new inputs.
-        
-        Args:
-        - inputs (Tensor): Input tensor. Shape: (num_samples, in_dim)
-        
-        Returns:
-        - Tensor: Predictions. Shape: (num_samples, out_dim)
-        """
-        self.eval()
-        # Ensure input is on the correct device
-        device = next(self.parameters()).device
-        inputs = inputs.to(device)
-
-        with torch.no_grad():
-            preds = self.forward(inputs)
-
-        return preds
-
-
-if __name__ == "__main__":
-    # ------------------------------------------------------------------
-    # 1. Setup & Configuration
-    # ------------------------------------------------------------------
-    seed_everything(42)
-
-    # ------------------------------------------------------------------
-    # 2. Data Generation
-    # ------------------------------------------------------------------
-    # Task: Regression y = 2x + 1
-    N_SAMPLES = 2000
-    DIM_IN = 5
-    DIM_OUT = 1
-
-    # Generate synthetic data
-    X_raw = torch.randn(N_SAMPLES, DIM_IN)
-    # Let's say target depends strictly on the first feature for simplicity
-    weights = torch.tensor([2.0] + [0.0] * (DIM_IN - 1)).unsqueeze(1) # (5, 1)
-    Y_raw = X_raw @ weights + 1.0
-
-    # ------------------------------------------------------------------
-    # 3. Data Splitting (Train: 70%, Val: 15%, Test: 15%)
-    # ------------------------------------------------------------------
-    n_train = int(0.7 * N_SAMPLES)
-    n_val = int(0.15 * N_SAMPLES)
-    n_test = N_SAMPLES - n_train - n_val
-
-    # Create indices and split
-    indices = torch.randperm(N_SAMPLES)
-    train_idx = indices[:n_train]
-    val_idx = indices[n_train : n_train + n_val]
-    test_idx = indices[n_train + n_val :]
-
-    X_train, Y_train = X_raw[train_idx], Y_raw[train_idx]
-    X_val, Y_val = X_raw[val_idx], Y_raw[val_idx]
-    X_test, Y_test = X_raw[test_idx], Y_raw[test_idx]
-
-    logger.info(f'Data Split: Train={len(X_train)}, Val={len(X_val)}, Test={len(X_test)}')
-
-    # ------------------------------------------------------------------
-    # 4. Data Preprocessing (Normalization)
-    # ------------------------------------------------------------------
-    # It is industry standard to fit scalers ONLY on training data
-    input_scaler = TensorScaler().fit(X_train)
-    target_scaler = TensorScaler().fit(Y_train)
-
-    # Transform all sets
-    X_train_s = input_scaler.transform(X_train)
-    Y_train_s = target_scaler.transform(Y_train)
-
-    X_val_s = input_scaler.transform(X_val)
-    Y_val_s = target_scaler.transform(Y_val)
-
-    scalers = {'input': input_scaler, 'target': target_scaler}
-
-    # Create Datasets and Loaders
-    train_loader = DataLoader(BaseDataset(X_train_s, Y_train_s), batch_size=64, shuffle=True)
-    val_loader = DataLoader(BaseDataset(X_val_s, Y_val_s), batch_size=64, shuffle=False)
-
-    # ------------------------------------------------------------------
-    # 5. Model Initialization
-    # ------------------------------------------------------------------
-    model = SimpleMLP(in_dim=DIM_IN, out_dim=DIM_OUT, hidden_dim=128)
-
-    num_params = sum(p.numel() for p in model.parameters())
-    logger.info(f'Model has {num_params} parameters')
-
-    # ------------------------------------------------------------------
-    # 6. Training Loop
-    # ------------------------------------------------------------------
-    trainer = SupervisedTrainer(model=model, scalers=scalers, max_epochs=500, lr=1e-3, patience=10)
-
-    logger.info('\n--- Starting Training ---')
-    trainer.fit(train_loader, val_loader)
-
-    # ------------------------------------------------------------------
-    # 7. Testing & Evaluation
-    # ------------------------------------------------------------------
-    logger.info('\n--- Starting Evaluation ---')
-
-    # Load trained model
-    checkpoint = torch.load('./runs/model.pt', map_location='cuda' if torch.cuda.is_available() else 'cpu')
-    model.load_state_dict(checkpoint['model_state_dict'])
-
-    input_scaler = TensorScaler()
-    input_scaler.load_state_dict(checkpoint['scaler_state']['input'])
-    target_scaler = TensorScaler()
-    target_scaler.load_state_dict(checkpoint['scaler_state']['target'])
-
-    X_test_s = input_scaler.transform(X_test)
-
-    # Inference using the custom predict() method
-    Y_preds_s = model.predict(X_test_s)
-
-    # Inverse transform predictions to original scale
-    Y_preds = target_scaler.inverse_transform(Y_preds_s)
-
-    # Move to CPU for metric calculation
-    Y_preds_cpu = Y_preds.cpu()
-    Y_test_cpu = Y_test.cpu()
-
-    # Calculate Metrics (MSE & MAE)
-    mse = torch.mean((Y_preds_cpu - Y_test_cpu) ** 2).item()
-    mae = torch.mean(torch.abs(Y_preds_cpu - Y_test_cpu)).item()
-
-    logger.info(f'Test Set MSE: {mse:.4f}')
-    logger.info(f'Test Set MAE: {mae:.4f}')
-
-    # Visual Check (First 3 samples)
-    logger.info('\nVisual Check (First 3 samples):')
-    logger.info(f'Truth: {Y_test_cpu[:3].numpy().flatten()}')
-    logger.info(f'Preds: {Y_preds_cpu[:3].numpy().flatten()}')
+        return loss / self.current_rollout_steps

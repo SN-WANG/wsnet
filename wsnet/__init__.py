@@ -8,7 +8,7 @@ from . import nets
 from . import utils
 
 
-__version__ = '1.5.3'
+__version__ = '1.6.0'
 __author__ = 'Shengning Wang (王晟宁)'
 __email__ = 'snwang2023@163.com'
 
