@@ -140,8 +140,8 @@ def compute_ar_metrics(gt: Tensor, pred: Tensor, channel_names: List[str]) -> Di
     Computes comprehensive autoregressive evaluation metrics.
 
     Args:
-        gt (Tensor): Ground truth sequence. Shape (batch_size, seq_len, num_nodes, num_channels)
-        pred (Tensor): Predicted sequence. Shape (batch_size, seq_len, num_nodes, num_channels)
+        gt (Tensor): Ground truth sequence. Shape (seq_len, num_nodes, num_channels)
+        pred (Tensor): Predicted sequence. Shape (seq_len, num_nodes, num_channels)
         channel_names (List[str]): List of channel names.
 
     Returns:
@@ -155,8 +155,8 @@ def compute_ar_metrics(gt: Tensor, pred: Tensor, channel_names: List[str]) -> Di
 
     # 1. Per-Channel Metrics
     for c, name in enumerate(channel_names):
-        gt_c = gt[..., c]  # (batch_size, seq_len, num_nodes)
-        pred_c = pred[..., c]  # (batch_size, seq_len, num_nodes)
+        gt_c = gt[..., c]  # (seq_len, num_nodes)
+        pred_c = pred[..., c]  # (seq_len, num_nodes)
 
         abs_diff = torch.abs(gt_c - pred_c)
         sq_diff = (gt_c - pred_c) ** 2
@@ -175,25 +175,19 @@ def compute_ar_metrics(gt: Tensor, pred: Tensor, channel_names: List[str]) -> Di
         r2_val = 1.0 - (ss_res / (ss_tot + 1e-8))
         nmse_val = mse_val / (torch.mean(gt_c ** 2).item() + 1e-8)
 
-        # 4. Global Gradient NMSE (Smoothness check)
-        grad_gt_c = gt_c[:, 1:, :] - gt_c[:, :-1, :]
-        grad_pred_c = pred_c[:, 1:, :] - pred_c[:, :-1, :]
-        grad_mse = torch.mean((grad_gt_c - grad_pred_c) ** 2)
-        grad_nmse = (grad_mse / (torch.mean(grad_gt_c ** 2) + 1e-8)).item()
-
         # 5. Step-wise MAE and MaxErr
-        step_mae = torch.mean(abs_diff, dim=(0, 2))
-        step_max = torch.max(abs_diff, dim=(0, 2)).values
+        step_mae = torch.mean(abs_diff, dim=1)
+        step_max = torch.max(abs_diff, dim=1).values
 
         # 6. Step-wise MSE and RMSE
-        step_mse = torch.mean(sq_diff, dim=(0, 2))
+        step_mse = torch.mean(sq_diff, dim=1)
         step_rmse = torch.sqrt(step_mse)
 
         # 7. Step-wise R2 and NMSE
-        step_ss_res = torch.sum(sq_diff, dim=(0, 2))
-        step_ss_tot = torch.sum((gt_c - torch.mean(gt_c, dim=(0, 2), keepdim=True)) ** 2, dim=(0, 2))
+        step_ss_res = torch.sum(sq_diff, dim=1)
+        step_ss_tot = torch.sum((gt_c - torch.mean(gt_c, dim=1, keepdim=True)) ** 2, dim=1)
         step_r2 = (1.0 - (step_ss_res / (step_ss_tot + 1e-8)))
-        step_nmse = step_mse / (torch.mean(gt_c ** 2, dim=(0, 2)) + 1e-8)
+        step_nmse = step_mse / (torch.mean(gt_c ** 2, dim=1) + 1e-8)
 
         metrics[name] = {
             "NMSE": nmse_val,
@@ -202,7 +196,6 @@ def compute_ar_metrics(gt: Tensor, pred: Tensor, channel_names: List[str]) -> Di
             "RMSE": rmse_val,
             "MAE": mae_val,
             "MaxErr": max_val,
-            "Grad-NMSE": grad_nmse,
             "Step-NMSE": step_nmse.tolist(),
             "Step-R2": step_r2.tolist(),
         }
@@ -449,7 +442,7 @@ class BaseTrainer:
         """
         Main training loop.
         """
-        logger.info(f'start training on {sl.m}{self.device}{sl.q}')
+        logger.info(f"start training on {sl.m}{self.device}{sl.q} with {sl.m}{self.max_epochs}{sl.q} epochs")
         start_time = time.time()
         patience_counter = 0
 
@@ -537,7 +530,7 @@ class AutoregressiveTrainer(BaseTrainer):
                  scheduler_t0: int = 50, scheduler_t_mult: int = 2, eta_min: float = 1e-6,
                  # curriculum params
                  max_rollout_steps: int = 5, curr_patience: int = 10, curr_sensitivity: float = 0.01,
-                 noise_std_init: float = 0.05, noise_decay: float = 0.9, sobolev_beta: float = 0.1,
+                 noise_std_init: float = 0.05, noise_decay: float = 0.9,
                  # base params
                  **kwargs):
         """
@@ -550,14 +543,13 @@ class AutoregressiveTrainer(BaseTrainer):
             curr_sensitivity (float): Threshold for loss improvement.
             noise_std_init (float): Initial noise injection std dev.
             noise_decay (float): Multiplier for noise when curriculum advances.
-            sobolev_beta (float): Weight for gradient NMSE term in loss.
             **kwargs: Arguments passed to BaseTrainer.
         """
 
         # 1. Initialize BaseTrainer with defaults
-        optimizer = kwargs.pop('optimizer', None)
-        scheduler = kwargs.pop('scheduler', None)
-        criterion = kwargs.pop('criterion', None)
+        optimizer = kwargs.pop("optimizer", None)
+        scheduler = kwargs.pop("scheduler", None)
+        criterion = kwargs.pop("criterion", None)
 
         # default optimizer: AdamW
         if optimizer is None:
@@ -581,7 +573,6 @@ class AutoregressiveTrainer(BaseTrainer):
         self.curr_sensitivity = curr_sensitivity
         self.noise_std_init = noise_std_init
         self.noise_decay = noise_decay
-        self.sobolev_beta = sobolev_beta
 
         # 3. Initialize curriculum state
         self.current_rollout_steps = 1
@@ -634,12 +625,12 @@ class AutoregressiveTrainer(BaseTrainer):
         Computes the pushforward rollout loss with noise injection.
 
         Steps:
-        1. parse augumented "super batch"
+        1. parse augmented "super batch"
         2. initialize state x_0
         3. inject noise: tilde_x_0 = x_0 + epsilon
         4. pushforward rollout:
             a. predict: hat_x_t+1 = f(tilde_x_t)
-            b. compute Sobolev loss: L_t = loss(hat_x_t+1, gt_x_t+1) + beta * loss(grad(hat_x_t+1), grad(gt_x_t+1))
+            b. compute loss: L_t = loss(hat_x_t+1, gt_x_t+1)
             c. update state: x_t+1 = hat_x_t+1
 
         Args:
@@ -651,7 +642,7 @@ class AutoregressiveTrainer(BaseTrainer):
         - Tensor: Scalar loss averaged over rollout steps. Shape (1,)
         """
 
-        # 1. parse augumented "super batch"
+        # 1. parse augmented "super batch"
         seq_window, coords_window = batch
 
         # 2. intialize state x_0
@@ -670,15 +661,9 @@ class AutoregressiveTrainer(BaseTrainer):
             else:
                 pred_state = self.model(input_state)
 
-            # b. compute step Sobolev loss
+            # b. compute step loss
             target_state = seq_window[:, t + 1]
-            pred_grad = pred_state[:, 1:, :] - pred_state[:, :-1, :]
-            target_grad = target_state[:, 1:, :] - target_state[:, :-1, :]
-
-            state_loss = self.criterion(pred_state, target_state)
-            grad_loss = self.criterion(pred_grad, target_grad)
-
-            loss += (state_loss + self.sobolev_beta * grad_loss)
+            loss += self.criterion(pred_state, target_state)
 
             # c. update state
             input_state = pred_state

@@ -88,7 +88,7 @@ class CFDataset(Dataset):
 
         for case_name in tqdm(self.case_list, desc='loading cases', leave=False, dynamic_ncols=True):
             # Define cache path
-            cache_path = self.processed_dir / f'{case_name}.pt'
+            cache_path = self.processed_dir / f"{case_name}.pt"
 
             if cache_path.exists() and not force_reprocess:
                 # Load from cache
@@ -230,7 +230,7 @@ class CFDataset(Dataset):
             seq_win: List[Tensor] = []
             coords_win: List[Tensor] = []
 
-            logger.info(f'starting data augmentation for {sl.m}{split_name}{sl.q} split...')
+            logger.info(f'start data augmentation for {split_name} split...')
 
             pbar = tqdm(zip(dataset.sequences, dataset.coords), total=len(dataset.sequences),
                         desc=f'augmenting {split_name} (windows)', leave=False, dynamic_ncols=True)
@@ -256,12 +256,12 @@ class CFDataset(Dataset):
             dataset.sequences = list(dataset.sequences)
             dataset.coords = list(dataset.coords)
 
-            logger.info(f'augmentation complete for {split_name}. '
-                          f'batch: {sl.m}{len(dataset)}{sl.q}, length: {sl.m}{dataset.sequences[0].shape[0]}{sl.q}')
+            logger.info(f"{sl.g}augmentation complete for {split_name}.{sl.q} "
+                          f"batch: {sl.m}{len(dataset)}{sl.q}, length: {sl.m}{dataset.sequences[0].shape[0]}{sl.q}")
 
         # Process train data and val data
-        create_windows(train_data, 'train')
-        create_windows(val_data, 'validation')
+        create_windows(train_data, "train")
+        create_windows(val_data, "validation")
 
         return train_data, val_data, test_data
 
