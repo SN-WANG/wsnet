@@ -587,10 +587,10 @@ class AutoregressiveTrainer(BaseTrainer):
         """
 
         # calculate relative improvement
-        if self.prev_val_loss > 1e-9:
-            rel_improv = np.abs(self.prev_val_loss - val_loss) / self.prev_val_loss
-        else:
+        if self.prev_val_loss == float("inf") or self.prev_val_loss < 1e-9:
             rel_improv = 0.0
+        else:
+            rel_improv = np.abs(self.prev_val_loss - val_loss) / self.prev_val_loss
 
         self.prev_val_loss = val_loss
 
