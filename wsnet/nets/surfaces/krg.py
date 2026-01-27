@@ -730,7 +730,7 @@ class KRG:
         else:
             bounds = None
 
-        logger.info(f'{sl.g}training KRG (Poly: {self.poly_name}, Kernel: {self.kernel_name})...{sl.q}')
+        logger.info(f'training KRG (poly: {self.poly_name}, kernel: {self.kernel_name})...')
 
         # 4. Optimization: Minimize the joint negative concentrated log-likelihood
         res = minimize(fun=self._objective_function, x0=theta_initial, args=(x_scaled, y_scaled, D),
@@ -785,7 +785,7 @@ class KRG:
         x_test_scaled = self.scaler_x.transform(x_test)
 
         # 2. Perform predictions: loop over test points
-        logger.info(f'{sl.g}predicting KRG (Poly: {self.poly_name}, Kernel: {self.kernel_name})...{sl.q}')
+        logger.info(f'predicting KRG (poly: {self.poly_name}, kernel: {self.kernel_name})...')
 
         # Nested loop
         # for i in range(num_test):

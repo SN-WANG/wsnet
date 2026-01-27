@@ -84,7 +84,7 @@ class MFSMLS:
         if x_hf.ndim == 1: x_hf = x_lf.reshape(-1, 1)
         if y_hf.ndim == 1: y_hf = y_hf.reshape(-1, 1)
 
-        logger.info(f'{sl.g}training MFS-MLS (PolyDegree={self.poly_degree})...{sl.q}')
+        logger.info(f'training MFS-MLS (polyDegree={self.poly_degree})...')
 
         # 1. Train LF model on raw data
         self.lf_model.fit(x_lf, y_lf)
@@ -140,7 +140,7 @@ class MFSMLS:
 
         x_test_scaled = self.scaler_x.transform(x_test)
 
-        logger.info(f'{sl.g}predicting MFS-MLS (PolyDegree={self.poly_degree})...{sl.q}')
+        logger.info(f'predicting MFS-MLS (polyDegree={self.poly_degree})...')
 
         # 2. Prepare basis for query points
         y_lf_at_test = self.lf_model.predict(x_test)

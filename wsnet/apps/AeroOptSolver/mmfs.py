@@ -185,32 +185,28 @@ class MMFS:
         - x_hf (np.ndarray): High-Fidelity inputs (num_hf, num_features).
         - y_hf (np.ndarray): High-Fidelity targets (num_hf, num_outputs).
         """
-        # Ensure 2D arrays
+        # ensure 2D arrays
         if x_lf.ndim == 1: x_lf = x_lf.reshape(-1, 1)
         if y_lf.ndim == 1: y_lf = y_lf.reshape(-1, 1)
         if x_hf.ndim == 1: x_hf = x_hf.reshape(-1, 1)
         if y_hf.ndim == 1: y_hf = y_hf.reshape(-1, 1)
 
-        logger.info(f"{sl.g}training MMFS (LF=RBF, SigmaBounds={self.sigma_bounds})...{sl.q}")
+        logger.info(f"training MMFS (LF=RBF, SigmaBounds={self.sigma_bounds})...")
 
-        # 1. Fit LF model
+        # 1. fit LF model
         self.lf_model.fit(x_lf, y_lf)
 
-        # 2. Scale HF data
+        # 2. scale HF data
         self.x_hf_train_ = self.scaler_x.fit_transform(x_hf)
         self.y_hf_train_ = self.scaler_y.fit_transform(y_hf)
 
-        # 3. Get LF predictions at HF points (Y_c)
-        # We need these predictions to be in the same scale as the scaled HF targets
-        # for the correction coefficients to be meaningful.
+        # 3. get LF predictions at HF points (Y_c)
         y_lf_at_hf_raw = self.lf_model.predict(x_hf)
         if isinstance(y_lf_at_hf_raw, tuple):
             y_lf_at_hf_raw = y_lf_at_hf_raw[0]
-
-        # Use the HF target scaler to transform LF predictions into the scaled latent space
         y_lf_at_hf_scaled = self.scaler_y.transform(y_lf_at_hf_raw)
 
-        # 4. Optimize Sigma via LOOCV (Step 3 in paper, Eq 10)
+        # 4. optimize sigma via LOOCV (Step 3 in paper, Eq 10)
         dist_matrix = cdist(self.x_hf_train_, self.x_hf_train_, metric='euclidean')
 
         logger.info('optimizing MMFS shape parameter (sigma) via LOOCV...')
@@ -223,8 +219,7 @@ class MMFS:
         self.sigma_ = res.x
         logger.info(f'{sl.y}optimal sigma found: {self.sigma_:.4f}{sl.q}')
 
-        # 5. Compute Final Coefficients (Beta) for each output
-        # Construct Correlation Matrix Phi
+        # 5. compute final coefficients (beta) for each output
         phi_train = self._multiquadric_kernel(dist_matrix, self.sigma_)
 
         self.beta_ = []
@@ -234,10 +229,10 @@ class MMFS:
             y_c = y_lf_at_hf_scaled[:, m:m+1]
             y_e = self.y_hf_train_[:, m:m+1]
 
-            # Expansion Matrix H (Eq 8)
+            # expansion matrix H (Eq 8)
             H = self._construct_expansion_matrix(phi_train, y_c)
 
-            # Solve Beta (Eq 9: Generalized Inverse)
+            # solve beta (Eq 9: generalized inverse)
             beta_m = pinv(H) @ y_e
             self.beta_.append(beta_m)
 

@@ -109,7 +109,7 @@ class RBF:
         x_scaled = self.scaler_x.fit_transform(x_train)
         y_scaled = self.scaler_y.fit_transform(y_train)
 
-        logger.info(f'{sl.g}training RBF (Centers={self.num_centers}, Gamma={self.gamma})...{sl.q}')
+        logger.info(f'training RBF (centers={self.num_centers}, gamma={self.gamma})...')
 
         # 2. Center Initialization (KMeans)
         num_samples = x_scaled.shape[0]
@@ -168,7 +168,7 @@ class RBF:
 
         x_test_scaled = self.scaler_x.transform(x_test)
 
-        logger.info(f'{sl.g}predicting RBF (Centers={self.num_centers}, Gamma={self.gamma})...{sl.q}')
+        logger.info(f'predicting RBF (centers={self.num_centers}, gamma={self.gamma})...')
 
         # 2. Feature Transformation
         phi_test = self._compute_features(x_test_scaled)

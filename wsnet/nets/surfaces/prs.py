@@ -75,7 +75,7 @@ class PRS:
         x_scaled = self.scaler_x.fit_transform(x_train)
         y_scaled = self.scaler_y.fit_transform(y_train)
 
-        logger.info(f'{sl.g}training PRS (Degree={self.degree}, Alpha={self.alpha})...{sl.q}')
+        logger.info(f'training PRS (degree={self.degree}, alpha={self.alpha})...')
 
         # 2. Feature Transformation: Polynomial expansion
         x_poly = self.poly_trans.fit_transform(x_scaled)
@@ -118,7 +118,7 @@ class PRS:
         x_poly = self.poly_trans.transform(x_test_scaled)
 
         # 3. Perform predictions: predict on test points
-        logger.info(f'{sl.g}predicting PRS (Degree={self.degree}, Alpha={self.alpha})...{sl.q}')
+        logger.info(f'predicting PRS (degree={self.degree}, alpha={self.alpha})...')
         y_pred_scaled = self.model.predict(x_poly)
 
         logger.info(f'{sl.g}PRS prediction completed.{sl.q}')

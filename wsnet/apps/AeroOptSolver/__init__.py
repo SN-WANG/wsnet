@@ -8,12 +8,14 @@ from .t_ahs import TAHS
 
 # Hoist from Multi-Fidelity Surrogate Models
 from .mfs_mls import MFSMLS
+from .mmfs import MMFS
 
 
 __all__ = [
     # Hybrid Surrogate Models
-    'TAHS',
+    "TAHS",
 
     # Multi-Fidelity Surrogate Models
-    'MFSMLS'
+    "MFSMLS",
+    "MMFS"
 ]

@@ -66,8 +66,6 @@ def get_args() -> argparse.Namespace:
     # ----------------------------------------------------------------------
     parser.add_argument("--max_epochs", type=int, default=450, 
                         help="Total number of training epochs.")
-    parser.add_argument("--patience", type=int, default=450, 
-                        help="Early stopping patience (number of epochs without improvement).")
 
     # optimizer (AdamW)
     parser.add_argument("--lr", type=float, default=1e-3, 

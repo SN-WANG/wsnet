@@ -1,4 +1,4 @@
-# Deep learning engine
+# Deep Learning Engine
 # Author: Shengning Wang
 
 import sys
@@ -7,7 +7,7 @@ import time
 import random
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Callable, Union, Tuple
+from typing import List, Dict, Any, Optional, Union, Tuple
 
 import numpy as np
 import torch
@@ -588,7 +588,7 @@ class AutoregressiveTrainer(BaseTrainer):
 
         # calculate relative improvement
         if self.prev_val_loss > 1e-9:
-            rel_improv = (self.prev_val_loss - val_loss) / self.prev_val_loss
+            rel_improv = np.abs(self.prev_val_loss - val_loss) / self.prev_val_loss
         else:
             rel_improv = 0.0
 

@@ -126,7 +126,7 @@ class TAHS:
         if y_train.ndim == 1:
             y_train = y_train.reshape(-1, 1)
 
-        logger.info(f'{sl.g}training T-AHS (Threshold={self.threshold})...{sl.q}')
+        logger.info(f'training T-AHS (threshold={self.threshold})...')
 
         # --- Stage 1: Model Selection via LOO-CV ---
         cv_errors = []
@@ -168,7 +168,7 @@ class TAHS:
             self.models_pool[i].fit(x_train, y_train)
 
         # 2. Fit the Uncertainty Model (KRG)
-        logger.info(f'{sl.g}fitting uncertainty model (KRG) for adaptive weighting...{sl.q}')
+        logger.info(f'fitting uncertainty model (KRG) for adaptive weighting...')
         self.uncertainty_model_.fit(x_train, y_train)
 
         self.is_fitted = True
@@ -205,7 +205,7 @@ class TAHS:
         num_samples = x_test.shape[0]
         num_outputs = self.uncertainty_model_.beta.shape[1]
 
-        logger.info(f'{sl.g}predicting T-AHS (Active Models: {len(self.activate_indices_)})...{sl.q}')
+        logger.info(f'predicting T-AHS (Active Models: {len(self.activate_indices_)})...')
 
         # 1. Get Uncertainty Estimate (s^2)
         _, mse_pred_tuple = self.uncertainty_model_.predict(x_test)

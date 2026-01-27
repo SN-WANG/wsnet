@@ -20,7 +20,7 @@ if project_root not in sys.path:
 
 from wsnet.nets import GeoFNO
 from wsnet.utils import (
-    sl, logger, seed_everything, compute_ar_metrics, TensorScaler, AutoregressiveTrainer, CFDataset, CFDAnimation
+    sl, logger, seed_everything, compute_ar_metrics, TensorScaler, AutoregressiveTrainer, FlowData, CFDAnimation
 )
 
 
@@ -80,18 +80,18 @@ class CoordinateScaler:
 
 class ScaledCFDataset(Dataset):
     """
-    Wraps CFDataset to apply feature standardization and coordinate normalization.
+    Wraps FlowData to apply feature standardization and coordinate normalization.
 
     attributes:
-        dataset (CFDataset): The underlying raw dataset.
+        dataset (FlowData): The underlying raw dataset.
         scaler (TensorScaler): fitted scaler for feature standardization.
         mins (Tensor): Minimum coordinate values. Shape (spatial_dim,).
         maxs (Tensor): Maximum coordinate values. Shape (spatial_dim,).
     """
-    def __init__(self, dataset: CFDataset, feature_scaler: TensorScaler, coord_scaler: CoordinateScaler):
+    def __init__(self, dataset: FlowData, feature_scaler: TensorScaler, coord_scaler: CoordinateScaler):
         """
         Args:
-            dataset: Instance of CFDataset.
+            dataset: Instance of FlowData.
             feature_scaler: Fitted TensorScaler instance.
             coord_scaler: Fitted CoordinateScaler instance.
         """
@@ -142,10 +142,11 @@ def train_pipeline(args: argparse.Namespace) -> None:
 
     # --- 1. Data Preparation ---
     logger.info("initializing datasets...")
-    train_raw, val_raw, _ = CFDataset.build_datasets(
-        data_dir=args.data_dir, spatial_dim=args.spatial_dim, win_len=args.win_len, win_stride=args.win_stride)
+    train_raw, val_raw, _ = FlowData.spawn(
+        data_dir=args.data_dir, spatial_dim=args.spatial_dim, win_len=args.win_len, win_stride=args.win_stride
+    )
 
-    train_seq = torch.cat(train_raw.sequences, dim=0)
+    train_seq = torch.cat(train_raw.seqs, dim=0)
     feature_scaler = TensorScaler().fit(train_seq, feature_dim=-1)
     coord_scaler = CoordinateScaler(args.spatial_dim).fit(train_raw.coords)
 
@@ -169,7 +170,7 @@ def train_pipeline(args: argparse.Namespace) -> None:
     # --- 3. Training Execution ---
     scalers={"feature_scaler": feature_scaler, "coord_scaler": coord_scaler}
 
-    trainer = AutoregressiveTrainer(model=model, max_epochs=args.max_epochs, patience=args.patience,
+    trainer = AutoregressiveTrainer(model=model, max_epochs=args.max_epochs,
                                     scalers=scalers, output_dir=output_dir, device=args.device,
                                     lr=args.lr, weight_decay=args.weight_decay, scheduler_t0=args.scheduler_t0,
                                     scheduler_t_mult=args.scheduler_t_mult, eta_min=args.eta_min,
@@ -210,8 +211,9 @@ def inference_pipeline(args: argparse.Namespace) -> None:
     coord_scaler.load_state_dict(checkpoint["scaler_state_dict"]["coord_scaler"])
 
     # --- 2. Data Preparation ---
-    _, _, test_raw = CFDataset.build_datasets(
-        data_dir=args.data_dir, spatial_dim=args.spatial_dim, win_len=args.win_len, win_stride=args.win_stride)
+    _, _, test_raw = FlowData.spawn(
+        data_dir=args.data_dir, spatial_dim=args.spatial_dim, win_len=args.win_len, win_stride=args.win_stride
+    )
 
     test_dataset = ScaledCFDataset(test_raw, feature_scaler, coord_scaler)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
@@ -239,7 +241,7 @@ def inference_pipeline(args: argparse.Namespace) -> None:
             seq_scaled = seq_scaled.to(device)
             coords_norm = coords_norm.to(device)
 
-            case_name = test_raw.case_list[i]
+            case_name = test_raw.case_names[i]
             steps = seq_scaled.shape[1] - 1
             initial_state = seq_scaled[:, 0]
 
@@ -266,7 +268,7 @@ def inference_pipeline(args: argparse.Namespace) -> None:
 
             # visualize
             if i == 0:
-                logger.info(f'rendering animation for case: {sl.b}{case_name}{sl.q}')
+                logger.info(f"rendering animation for case: {sl.b}{case_name}{sl.q}")
                 visualizer.animate_comparison(
                     gt=gt_seq, pred=pred_seq, coords=coords_raw, case_name=case_name)
 

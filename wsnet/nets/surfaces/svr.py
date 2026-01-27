@@ -79,8 +79,8 @@ class SVR:
         x_scaled = self.scaler_x.fit_transform(x_train)
         y_scaled = self.scaler_y.fit_transform(y_train)
 
-        logger.info(f"{sl.g}training SVR (kernel={self.kernel}, gamma={self.gamma}, "
-                    f"C={self.C}, epsilon={self.epsilon})...{sl.q}")
+        logger.info(f"training SVR (kernel={self.kernel}, gamma={self.gamma}, "
+                    f"c={self.C}, epsilon={self.epsilon})...")
 
         # 3. Model Training
         self.model.fit(x_scaled, y_scaled)
@@ -117,8 +117,8 @@ class SVR:
         x_test_scaled = self.scaler_x.transform(x_test)
 
         # 2. Perform predictions: predict on test points
-        logger.info(f"{sl.g}predicting SVR (kernel={self.kernel}, gamma={self.gamma}, "
-                    f"C={self.C}, epsilon={self.epsilon})...{sl.q}")
+        logger.info(f"predicting SVR (kernel={self.kernel}, gamma={self.gamma}, "
+                    f"c={self.C}, epsilon={self.epsilon})...")
         y_pred_scaled = self.model.predict(x_test_scaled)
         logger.info(f'{sl.g}SVR prediction completed.{sl.q}')
 
