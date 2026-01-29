@@ -4,6 +4,7 @@ wsnet.utils: Workflow utilities for deep learning and surrogate modeling.
 Includes:
     Deep Learning Engine (engine.py),
     Design of Experiments (doe.py),
+    Infill Criteria for Sequential Sampling (infill.py),
     ANSYS Fluent Simulation Sequence Dataset Module (flow_data.py),
     Flow Sequence Visualization Module (flow_vis.py),
 """
@@ -24,6 +25,9 @@ from .engine import (
 
 # Hoist from doe (Design of Experiments)
 from .doe import lhs_design
+
+# Hoist from infill (Infill Criteria for Sequential Sampling)
+from .infill import Infill
 
 # Hoist from flow_data (ANSYS Fluent Simulation Sequence Dataset Module),
 from .flow_data import FlowData
@@ -46,11 +50,14 @@ __all__ = [
     "SupervisedTrainer", "AutoregressiveTrainer",
 
     # Design of Experiments
-    "lhs_design"
+    "lhs_design",
+
+    # Infill Criteria for Sequential Sampling
+    "Infill",
 
     # ANSYS Fluent Simulation Sequence Dataset Module
-    "FlowData"
+    "FlowData",
 
     # Flow Sequence Visualization Module
-    "CFDAnimation"
+    "CFDAnimation",
 ]

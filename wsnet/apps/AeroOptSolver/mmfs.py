@@ -210,11 +210,8 @@ class MMFS:
         dist_matrix = cdist(self.x_hf_train_, self.x_hf_train_, metric='euclidean')
 
         logger.info('optimizing MMFS shape parameter (sigma) via LOOCV...')
-        res = minimize_scalar(
-            fun=self._loocv_error,
-            bounds=self.sigma_bounds,
-            args=(dist_matrix, y_lf_at_hf_scaled, self.y_hf_train_),
-            method='bounded'
+        res = minimize_scalar(fun=self._loocv_error, bounds=self.sigma_bounds,
+            args=(dist_matrix, y_lf_at_hf_scaled, self.y_hf_train_), method='bounded'
         )
         self.sigma_ = res.x
         logger.info(f'{sl.y}optimal sigma found: {self.sigma_:.4f}{sl.q}')
@@ -250,14 +247,16 @@ class MMFS:
         3. Apply the expansion matrix transformation and correction coefficients.
 
         Args:
-        - x_test (np.ndarray): Test feature data (num_samples, num_features).
-        - y_test (Optional[np.ndarray]): Test target data (num_samples, num_outputs).
+            x_test (np.ndarray): Test feature data (num_samples, num_features).
+            y_test (Optional[np.ndarray]): Test target data (num_samples, num_outputs).
 
         Returns:
-        - Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
-            - If y_test is available: Returns (y_pred, metrics).
-            - If y_test is None: Returns y_pred.
-            - y_pred shape: (num_samples, num_outputs).
+            Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
+                If y_test is available: Returns a Tuple: (y_pred, metrics)
+                If y_test is None: Returns only y_pred
+
+            y_pred (np.ndarray): Predicted target values
+            metrics (Dict[str, float]): Dictionary of evaluation metrics
         """
         if x_test.ndim == 1:
             x_test = x_test.reshape(-1, 1)
@@ -265,57 +264,55 @@ class MMFS:
             y_test = y_test.reshape(-1, 1)
 
         if not self.is_fitted:
-            raise RuntimeError('Model not fitted. Please call fit() first.')
+            raise RuntimeError("Model not fitted. Please call fit() first.")
 
-        logger.info(f'{sl.g}predicting MMFS...{sl.q}')
+        logger.info(f"{sl.g}predicting MMFS...{sl.q}")
 
         num_samples = x_test.shape[0]
         num_outputs = len(self.beta_)
 
-        # 1. Scale Test Inputs
+        # 1. scale test inputs
         x_test_scaled = self.scaler_x.transform(x_test)
 
-        # 2. Get LF predictions at Test points (y_c in Eq 11)
+        # 2. get LF predictions at test points (y_c in Eq 11)
         y_lf_at_test_raw = self.lf_model.predict(x_test)
         if isinstance(y_lf_at_test_raw, tuple):
             y_lf_at_test_raw = y_lf_at_test_raw[0]
-
-        # Scale LF predictions to match the training latent space
         y_lf_at_test_scaled = self.scaler_y.transform(y_lf_at_test_raw)
 
-        # 3. Calculate Cross-Distances and Phi Matrix (Step 5 in paper)
-        dists_test = cdist(x_test_scaled, self.x_hf_train_, metric='euclidean')
+        # 3. calculate cross-distances and phi matrix (Step 5 in paper)
+        dists_test = cdist(x_test_scaled, self.x_hf_train_, metric="euclidean")
         phi_test = self._multiquadric_kernel(dists_test, self.sigma_)
 
-        # 4. Compute Predictions (Step 6 in paper)
+        # 4. compute predictions (Step 6 in paper)
         y_pred_scaled = np.zeros((num_samples, num_outputs))
 
         for m in range(num_outputs):
             y_c_test = y_lf_at_test_scaled[:, m:m+1]
             beta_m = self.beta_[m]
 
-            # Construct Expansion Matrix H* (Eq 12)
+            # construct expansion matrix H* (Eq 12)
             # H* = [diag(y_c_test) * phi_test, phi_test]
             H_star = self._construct_expansion_matrix(phi_test, y_c_test)
 
             # Eq 11: Y(x) = H* . beta
             y_pred_scaled[:, m:m+1] = H_star @ beta_m
 
-        # 5. Inverse Scale Predictions
+        # 5. inverse scale predictions
         y_pred = self.scaler_y.inverse_transform(y_pred_scaled)
 
         logger.info(f'{sl.g}MMFS prediction completed.{sl.q}')
 
-        # 6.1 Inference Mode
+        # 6.1 inference mode
         if y_test is None:
             return y_pred
 
-        # 6.2 Evaluation Mode
+        # 6.2 evaluation mode
         r2 = r2_score(y_test, y_pred)
         mse = mean_squared_error(y_test, y_pred)
         rmse = np.sqrt(mse)
 
-        metrics = {'r2': r2, 'mse': mse, 'rmse': rmse}
+        metrics = {"r2": r2, "mse": mse, "rmse": rmse}
 
         return y_pred, metrics
 
@@ -323,11 +320,10 @@ class MMFS:
 # ======================================================================
 # Example Usage
 # ======================================================================
-if __name__ == '__main__':
-    # Reproducibility
+if __name__ == "__main__":
     np.random.seed(42)
 
-    # --- Benchmark Functions (Forretal Function from paper Eq 14 & 15) ---
+    # --- benchmark functions (Forretal function from paper Eq 14 & 15) ---
     def forretal_hf(x: np.ndarray) -> np.ndarray:
         return (6 * x - 2)**2 * np.sin(12 * x - 4)
 
@@ -335,30 +331,30 @@ if __name__ == '__main__':
         # Variant A: y_c = 0.5 * y_e + 10(x - 0.5) - 5
         return 0.5 * forretal_hf(x) + 10 * (x - 0.5) - 5
 
-    # --- Data Generation ---
-    # Training: Low Fidelity (Dense)
+    # --- data generation ---
+    # training: low fidelity (dense)
     x_lf_train = np.linspace(0, 1, 50).reshape(-1, 1)
     y_lf_train = forretal_lf(x_lf_train)
 
-    # Training: High Fidelity (Sparse)
+    # training: high fidelity (sparse)
     x_hf_train = np.linspace(0, 1, 8).reshape(-1, 1)
     y_hf_train = forretal_hf(x_hf_train)
 
-    # Testing
+    # testing
     x_test = np.linspace(0, 1, 100).reshape(-1, 1)
     y_test = forretal_hf(x_test)
 
-    # --- Model Execution ---
-    # Instantiate MMFS
-    model = MMFS(lf_model_params={'num_centers': 20, 'gamma': 10.0})
+    # --- model execution ---
+    # instantiate MMFS
+    model = MMFS()
 
-    # Train
+    # train
     model.fit(x_lf_train, y_lf_train, x_hf_train, y_hf_train)
 
-    # Predict
+    # predict
     y_pred, test_metrics = model.predict(x_test, y_test)
 
-    # Output Results
+    # log results
     logger.info(f'--- Forretal Function Results ---')
     logger.info(f'Testing R2: {sl.m}{test_metrics["r2"]:.9f}{sl.q}')
     logger.info(f'Testing MSE: {sl.m}{test_metrics["mse"]:.9f}{sl.q}')

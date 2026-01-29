@@ -885,7 +885,7 @@ class KRG:
         mse = mean_squared_error(y_test, y_pred)
         rmse = np.sqrt(mse)
 
-        metrics = {'r2': r2, 'mse': mse, 'rmse': rmse}
+        metrics = {"r2": r2, "mse": mse, "rmse": rmse}
 
         return y_pred, mse_pred, metrics
 
