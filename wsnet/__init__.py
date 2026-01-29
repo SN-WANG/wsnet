@@ -9,7 +9,7 @@ from . import utils
 from . import apps
 
 
-__version__ = "1.8.0"
+__version__ = "1.8.1"
 __author__ = "Shengning Wang (王晟宁)"
 __email__ = "snwang2023@163.com"
 
