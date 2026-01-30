@@ -34,11 +34,11 @@ def get_args() -> argparse.Namespace:
                         help="Name list of the channels.")
     parser.add_argument("--spatial_dim", type=int, default=2, choices=[2, 3],
                         help="Spatial dimension of the fluid flow (2D or 3D).")
-    parser.add_argument("--win_len", type=int, default=11, 
+    parser.add_argument("--win_len", type=int, default=8, 
                         help="Total window length for data slicing (input + label sequence).")
-    parser.add_argument("--win_stride", type=int, default=3, 
+    parser.add_argument("--win_stride", type=int, default=2, 
                         help="Stride for sliding window augmentation.")
-    parser.add_argument("--batch_size", type=int, default=32, 
+    parser.add_argument("--batch_size", type=int, default=4, 
                         help="Batch size for training and validation.")
     parser.add_argument("--num_workers", type=int, default=4, 
                         help="Number of subprocesses for data loading.")
@@ -50,7 +50,7 @@ def get_args() -> argparse.Namespace:
                         help="Number of Fourier modes to keep per dimension.")
     parser.add_argument("--latent_grid_size", type=int, nargs='+', default=[96, 96], 
                         help="Resolution of the latent grid for spectral convolutions.")
-    parser.add_argument("--depth", type=int, default=4, 
+    parser.add_argument("--depth", type=int, default=2, 
                         help="Number of stacked FNO blocks.")
     parser.add_argument("--width", type=int, default=128, 
                         help="Number of hidden channels in the FNO blocks.")
@@ -82,13 +82,13 @@ def get_args() -> argparse.Namespace:
                         help="Minimum learning rate.")
 
     # curriculum
-    parser.add_argument("--max_rollout_steps", type=int, default=10, 
+    parser.add_argument("--max_rollout_steps", type=int, default=7, 
                         help="Maximum autoregressive rollout steps allowed.")
     parser.add_argument("--curr_patience", type=int, default=10, 
                         help="Epochs of stable loss required to increase rollout difficulty.")
-    parser.add_argument("--curr_sensitivity", type=float, default=0.05, 
+    parser.add_argument("--curr_sensitivity", type=float, default=0.01, 
                         help="Relative improvement threshold to consider loss as 'stable'.")
-    parser.add_argument("--noise_std_init", type=float, default=0.03, 
+    parser.add_argument("--noise_std_init", type=float, default=0.01, 
                         help="Initial Std dev of Gaussian noise injected into input state.")
     parser.add_argument("--noise_decay", type=float, default=0.9, 
                         help="Decay factor for noise when rollout steps increase.")

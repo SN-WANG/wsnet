@@ -176,9 +176,9 @@ if __name__ == "__main__":
     # define engineering bounds for thickness [min, max]
     # adjusting bounds to encompass the example input [5.0, 6.0, 4.0]
     bounds = np.array([
-        [1.0, 10.0],  # thick1
-        [1.0, 10.0],  # thick2
-        [1.0, 10.0]   # thick3
+        [4.0, 10.0],  # thick1
+        [4.0, 10.0],  # thick2
+        [4.0, 10.0]   # thick3
     ])
 
     # optimization target: index 0 (weight)
