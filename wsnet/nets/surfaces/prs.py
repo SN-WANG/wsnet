@@ -15,7 +15,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from wsnet.utils import sl, logger
+from wsnet.utils.engine import sl, logger
 
 
 class PRS:
@@ -75,7 +75,7 @@ class PRS:
         x_scaled = self.scaler_x.fit_transform(x_train)
         y_scaled = self.scaler_y.fit_transform(y_train)
 
-        logger.info(f'training PRS (degree={self.degree}, alpha={self.alpha})...')
+        # logger.info(f'training PRS (degree={self.degree}, alpha={self.alpha})...')
 
         # 2. Feature Transformation: Polynomial expansion
         x_poly = self.poly_trans.fit_transform(x_scaled)
@@ -84,7 +84,7 @@ class PRS:
         self.model.fit(x_poly, y_scaled)
         self.is_fitted = True
 
-        logger.info(f'{sl.g}PRS training completed.{sl.q}')
+        # logger.info(f'{sl.g}PRS training completed.{sl.q}')
 
     def predict(self, x_test: np.ndarray, y_test: Optional[np.ndarray] = None
                 ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
@@ -118,10 +118,10 @@ class PRS:
         x_poly = self.poly_trans.transform(x_test_scaled)
 
         # 3. Perform predictions: predict on test points
-        logger.info(f'predicting PRS (degree={self.degree}, alpha={self.alpha})...')
+        # logger.info(f'predicting PRS (degree={self.degree}, alpha={self.alpha})...')
         y_pred_scaled = self.model.predict(x_poly)
 
-        logger.info(f'{sl.g}PRS prediction completed.{sl.q}')
+        # logger.info(f'{sl.g}PRS prediction completed.{sl.q}')
 
         # 4. Inverse Scaling: Convert back to original space
         if y_pred_scaled.ndim == 1:

@@ -12,7 +12,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter
 from torch import Tensor
 from tqdm.auto import tqdm
 
-from wsnet.utils import sl, logger
+from wsnet.utils.engine import sl, logger
 
 
 class ProgressWriterMixin:

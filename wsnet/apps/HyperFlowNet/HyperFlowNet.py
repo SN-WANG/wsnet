@@ -18,9 +18,11 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from wsnet.nets import GeoFNO
-from wsnet.utils import (
-    sl, logger, seed_everything, compute_ar_metrics, TensorScaler, AutoregressiveTrainer, FlowData, CFDAnimation
+from wsnet.nets.operators import GeoFNO
+from wsnet.utils.flow_data import FlowData
+from wsnet.utils.CFDRender import CFDAnimation
+from wsnet.utils.engine import (
+    sl, logger, seed_everything, compute_ar_metrics, TensorScaler, AutoregressiveTrainer
 )
 
 

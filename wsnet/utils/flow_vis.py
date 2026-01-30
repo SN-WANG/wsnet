@@ -10,7 +10,7 @@ import pyvista as pv
 from torch import Tensor
 from tqdm.auto import tqdm
 
-from wsnet.utils import sl, logger
+from wsnet.utils.engine import sl, logger
 
 class FlowVis:
     """

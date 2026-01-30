@@ -16,7 +16,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from wsnet.utils import sl, logger
+from wsnet.utils.engine import sl, logger
 
 
 class KRG:
@@ -730,7 +730,7 @@ class KRG:
         else:
             bounds = None
 
-        logger.info(f'training KRG (poly: {self.poly_name}, kernel: {self.kernel_name})...')
+        # logger.info(f'training KRG (poly: {self.poly_name}, kernel: {self.kernel_name})...')
 
         # 4. Optimization: Minimize the joint negative concentrated log-likelihood
         res = minimize(fun=self._objective_function, x0=theta_initial, args=(x_scaled, y_scaled, D),
@@ -750,7 +750,7 @@ class KRG:
         self.G = final_fit['G']
         self.Ft = final_fit['Ft']
 
-        logger.info(f'{sl.g}KRG training completed.{sl.q}')
+        # logger.info(f'{sl.g}KRG training completed.{sl.q}')
 
     def predict(self, x_test: np.ndarray, y_test: Optional[np.ndarray] = None
                 ) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray, Dict[str, float]]]:
@@ -785,7 +785,7 @@ class KRG:
         x_test_scaled = self.scaler_x.transform(x_test)
 
         # 2. Perform predictions: loop over test points
-        logger.info(f'predicting KRG (poly: {self.poly_name}, kernel: {self.kernel_name})...')
+        # logger.info(f'predicting KRG (poly: {self.poly_name}, kernel: {self.kernel_name})...')
 
         # Nested loop
         # for i in range(num_test):
@@ -867,7 +867,7 @@ class KRG:
         # 5). Calculate mse uncertainty
         mse_pred_scaled = np.outer(mse_factor, self.sigma2)
 
-        logger.info(f'{sl.g}KRG prediction completed.{sl.q}')
+        # logger.info(f'{sl.g}KRG prediction completed.{sl.q}')
 
         # 3. Unscale predictions (both mean and mse)
         if y_pred_scaled.ndim == 1:

@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 from typing import List, Dict, Optional, Union, Tuple
 
-from wsnet.utils import sl, logger
+from wsnet.utils.engine import sl, logger
 
 
 class FlowData(Dataset):

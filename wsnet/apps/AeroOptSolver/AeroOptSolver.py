@@ -13,16 +13,13 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from wsnet.nets import KRG
-from wsnet.utils import lhs_design, Infill, sl, logger, seed_everything
+from wsnet.nets.surfaces.krg import KRG
+from wsnet.utils.doe import lhs_design
+from wsnet.utils.infill import Infill
+from wsnet.utils.engine import sl, logger, seed_everything
 
-from wsnet.apps.AeroOptSolver import (
-    # Hybrid Surrogate Models
-    TAHS,
-
-    # Multi-Fidelity Surrogate Models
-    MMFS
-    )
+from wsnet.apps.AeroOptSolver.t_ahs import TAHS
+from wsnet.apps.AeroOptSolver.mmfs import MMFS
 
 
 # ----------------------------------------------------------------------
