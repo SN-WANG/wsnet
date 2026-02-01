@@ -627,11 +627,11 @@ class AutoregressiveTrainer(BaseTrainer):
         Steps:
         1. parse augmented "super batch"
         2. initialize state x_0
-        3. inject noise: tilde_x_0 = x_0 + epsilon
-        4. pushforward rollout:
-            a. predict: hat_x_t+1 = f(tilde_x_t)
-            b. compute loss: L_t = loss(hat_x_t+1, gt_x_t+1)
-            c. update state: x_t+1 = hat_x_t+1
+        3. pushforward rollout:
+            a. inject noise: tilde_x_t = x_t + epsilon
+            b. predict: hat_x_t+1 = f(tilde_x_t)
+            c. compute loss: L_t = loss(hat_x_t+1, gt_x_t+1)
+            d. update state: x_t+1 = hat_x_t+1
 
         Args:
         - batch (Any): Data batch containing sequence and optionally coords.
@@ -649,23 +649,23 @@ class AutoregressiveTrainer(BaseTrainer):
         input_state = seq_window[:, 0]  # t = 0
         loss = torch.tensor(0.0, device=self.device)
 
-        # 2. noise injection
-        if self.model.training and self.current_noise_std > 1e-6:
-            input_state = input_state + torch.rand_like(input_state) * self.current_noise_std
-
         # 3. pushforward rollout
         for t in range(self.current_rollout_steps):
-            # a. forward pass
+            # a. inject noise
+            if self.model.training and self.current_noise_std > 1e-6:
+                input_state = input_state + torch.rand_like(input_state) * self.current_noise_std
+
+            # b. predict
             if coords_window is not None:
                 pred_state = self.model(input_state, coords_window)
             else:
                 pred_state = self.model(input_state)
 
-            # b. compute step loss
+            # c. compute step loss
             target_state = seq_window[:, t + 1]
             loss += self.criterion(pred_state, target_state)
 
-            # c. update state
+            # d. update state
             input_state = pred_state
 
         return loss / self.current_rollout_steps
