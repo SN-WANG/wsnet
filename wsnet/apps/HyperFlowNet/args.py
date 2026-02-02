@@ -16,7 +16,7 @@ def get_args() -> argparse.Namespace:
     # ----------------------------------------------------------------------
     # 1. General Settings
     # ----------------------------------------------------------------------
-    parser.add_argument("--seed", type=int, default=2023,
+    parser.add_argument("--seed", type=int, default=2026,
                         help="Random seed for reproducibility across numpy and torch.")
     parser.add_argument("--output_dir", type=str, default="./runs",
                         help="Root directory to save checkpoints, logs, and animations.")
@@ -50,7 +50,7 @@ def get_args() -> argparse.Namespace:
                         help="Number of Fourier modes to keep per dimension.")
     parser.add_argument("--latent_grid_size", type=int, nargs='+', default=[64, 64], 
                         help="Resolution of the latent grid for spectral convolutions.")
-    parser.add_argument("--depth", type=int, default=4, 
+    parser.add_argument("--depth", type=int, default=3, 
                         help="Number of stacked FNO blocks.")
     parser.add_argument("--width", type=int, default=128, 
                         help="Number of hidden channels in the FNO blocks.")
@@ -64,7 +64,7 @@ def get_args() -> argparse.Namespace:
     # ----------------------------------------------------------------------
     # 4. Training & Optimization Strategy
     # ----------------------------------------------------------------------
-    parser.add_argument("--max_epochs", type=int, default=600, 
+    parser.add_argument("--max_epochs", type=int, default=1500, 
                         help="Total number of training epochs.")
 
     # optimizer (AdamW)
@@ -73,24 +73,20 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--weight_decay", type=float, default=1e-4, 
                         help="Weight decay (L2 regularization) factor.")
 
-    # scheduler (Cosine Annealing Warm Restarts)
-    parser.add_argument("--scheduler_t0", type=int, default=200, 
-                        help="Number of epochs for the first restart (T_0).")
-    parser.add_argument("--scheduler_t_mult", type=int, default=2, 
-                        help="Multiplication factor for restart period (T_mult).")
+    # scheduler (Cosine Annealing LR)
     parser.add_argument("--eta_min", type=float, default=1e-6, 
                         help="Minimum learning rate.")
 
     # curriculum
     parser.add_argument("--max_rollout_steps", type=int, default=20, 
                         help="Maximum autoregressive rollout steps allowed.")
-    parser.add_argument("--curr_patience", type=int, default=20, 
+    parser.add_argument("--curr_patience", type=int, default=30, 
                         help="Epochs of stable loss required to increase rollout difficulty.")
     parser.add_argument("--curr_sensitivity", type=float, default=0.01, 
                         help="Relative improvement threshold to consider loss as 'stable'.")
     parser.add_argument("--noise_std_init", type=float, default=0.01, 
                         help="Initial Std dev of Gaussian noise injected into input state.")
-    parser.add_argument("--noise_decay", type=float, default=1, 
+    parser.add_argument("--noise_decay", type=float, default=0.7, 
                         help="Decay factor for noise when rollout steps increase.")
 
     args = parser.parse_args()

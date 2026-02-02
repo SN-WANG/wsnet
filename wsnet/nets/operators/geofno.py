@@ -435,8 +435,8 @@ class GeoFNO(nn.Module):
         output = self.fc_proj2(output)
 
         # 6. Global Residual Connection
-        if input_features.shape[-1] == output.shape[-1]:
-            output = input_features + output
+        # if input_features.shape[-1] == output.shape[-1]:
+        #     output = input_features + output
 
         return output
 

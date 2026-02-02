@@ -14,7 +14,7 @@ import torch
 from torch import nn, Tensor
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import Optimizer, Adam, AdamW
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, _LRScheduler
+from torch.optim.lr_scheduler import CosineAnnealingLR, _LRScheduler
 from tqdm.auto import tqdm
 
 
@@ -519,15 +519,14 @@ class AutoregressiveTrainer(BaseTrainer):
 
     Configs:
     1. Default optimizer: AdamW
-    2. Default scheduler: CosineAnnealingWarmRestarts
+    2. Default scheduler: CosineAnnealingLR
     3. Default criterion: NMSE + Sobolev Gradient Penalty
     4. Default curriculum: Adapts rollout steps and noise deviation based on val loss stability
     """
 
     def __init__(self, model: nn.Module,
                  # optimization params
-                 lr: float = 1e-3, weight_decay: float = 1e-5,
-                 scheduler_t0: int = 50, scheduler_t_mult: int = 2, eta_min: float = 1e-6,
+                 lr: float = 1e-3, weight_decay: float = 1e-5, max_epochs: int = 100, eta_min: float = 1e-6,
                  # curriculum params
                  max_rollout_steps: int = 5, curr_patience: int = 10, curr_sensitivity: float = 0.01,
                  noise_std_init: float = 0.05, noise_decay: float = 0.9,
@@ -537,7 +536,7 @@ class AutoregressiveTrainer(BaseTrainer):
         Args:
             model (nn.Module): The neural network.
             lr, weight_decay: AdamW parameters.
-            scheduler_t0, scheduler_t_mult, eta_min: CosineAnnealingWarmRestarts parameters.
+            max_epochs, eta_min: CosineAnnealingLR parameters.
             max_rollout_steps (int): Max steps for autoregressive rollout.
             curr_patience (int): Epochs of stable loss to trigger curriculum advance.
             curr_sensitivity (float): Threshold for loss improvement.
@@ -555,10 +554,10 @@ class AutoregressiveTrainer(BaseTrainer):
         if optimizer is None:
             optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-        # default scheduler: CosineAnnealingWarmRestarts
+        # default scheduler: CosineAnnealingLR
         if scheduler is None:
-            scheduler = CosineAnnealingWarmRestarts(
-                optimizer, T_0=scheduler_t0, T_mult=scheduler_t_mult, eta_min=eta_min
+            scheduler = CosineAnnealingLR(
+                optimizer, T_max=max_epochs, eta_min=eta_min
             )
 
         # default criterion: NMSE
@@ -590,7 +589,7 @@ class AutoregressiveTrainer(BaseTrainer):
         if self.prev_val_loss == float("inf") or self.prev_val_loss < 1e-9:
             rel_improv = 0.0
         else:
-            rel_improv = np.abs(self.prev_val_loss - val_loss) / self.prev_val_loss
+            rel_improv = self.prev_val_loss - val_loss / self.prev_val_loss
 
         self.prev_val_loss = val_loss
 
