@@ -350,7 +350,8 @@ class BaseTrainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.scalers =  scalers
-        self.optimizer = optimizer if optimizer else Adam(self.model.parameters(), lr=lr)
+        self.lr = lr
+        self.optimizer = optimizer if optimizer else Adam(self.model.parameters(), lr=self.lr)
         self.scheduler = scheduler
         self.criterion = criterion if criterion else nn.MSELoss()
 
@@ -526,7 +527,7 @@ class AutoregressiveTrainer(BaseTrainer):
 
     def __init__(self, model: nn.Module,
                  # optimization params
-                 lr: float = 1e-3, weight_decay: float = 1e-5, max_epochs: int = 100, eta_min: float = 1e-6,
+                 weight_decay: float = 1e-5, eta_min: float = 1e-6,
                  # curriculum params
                  max_rollout_steps: int = 5, curr_patience: int = 10, curr_sensitivity: float = 0.01,
                  noise_std_init: float = 0.05, noise_decay: float = 0.9,
@@ -535,8 +536,8 @@ class AutoregressiveTrainer(BaseTrainer):
         """
         Args:
             model (nn.Module): The neural network.
-            lr, weight_decay: AdamW parameters.
-            max_epochs, eta_min: CosineAnnealingLR parameters.
+            weight_decay: AdamW parameters.
+            eta_min: CosineAnnealingLR parameters.
             max_rollout_steps (int): Max steps for autoregressive rollout.
             curr_patience (int): Epochs of stable loss to trigger curriculum advance.
             curr_sensitivity (float): Threshold for loss improvement.
@@ -552,12 +553,12 @@ class AutoregressiveTrainer(BaseTrainer):
 
         # default optimizer: AdamW
         if optimizer is None:
-            optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+            optimizer = AdamW(model.parameters(), lr=self.lr, weight_decay=weight_decay)
 
         # default scheduler: CosineAnnealingLR
         if scheduler is None:
             scheduler = CosineAnnealingLR(
-                optimizer, T_max=max_epochs, eta_min=eta_min
+                optimizer, T_max=self.max_epochs, eta_min=eta_min
             )
 
         # default criterion: NMSE
