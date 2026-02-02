@@ -172,7 +172,7 @@ def train_pipeline(args: argparse.Namespace) -> None:
     # --- 3. Training Execution ---
     scalers={"feature_scaler": feature_scaler, "coord_scaler": coord_scaler}
 
-    trainer = AutoregressiveTrainer(model=model, max_epochs=args.max_epochs, lr=args.lr,
+    trainer = AutoregressiveTrainer(model=model, lr=args.lr, max_epochs=args.max_epochs,
                                     scalers=scalers, output_dir=output_dir, device=args.device,
                                     weight_decay=args.weight_decay, eta_min=args.eta_min,
                                     max_rollout_steps=args.max_rollout_steps,

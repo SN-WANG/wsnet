@@ -62,10 +62,8 @@ def get_args() -> argparse.Namespace:
                         help="Hidden dimension size for the deformation network.")
 
     # ----------------------------------------------------------------------
-    # 4. Training & Optimization Strategy
+    # 4. Training Strategy
     # ----------------------------------------------------------------------
-    parser.add_argument("--max_epochs", type=int, default=1500, 
-                        help="Total number of training epochs.")
 
     # optimizer (AdamW)
     parser.add_argument("--lr", type=float, default=5e-4, 
@@ -74,6 +72,8 @@ def get_args() -> argparse.Namespace:
                         help="Weight decay (L2 regularization) factor.")
 
     # scheduler (Cosine Annealing LR)
+    parser.add_argument("--max_epochs", type=int, default=1500, 
+                        help="Total number of training epochs.")
     parser.add_argument("--eta_min", type=float, default=1e-6, 
                         help="Minimum learning rate.")
 

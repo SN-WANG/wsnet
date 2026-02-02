@@ -325,7 +325,7 @@ class BaseTrainer:
     Subclasses must implement 'compute_loss' to define specific task logic.
     """
 
-    def __init__(self, model: nn.Module, max_epochs: int = 100, lr: float = 1e-3, patience: int = None,
+    def __init__(self, model: nn.Module, lr: float = 1e-3, max_epochs: int = 100, patience: int = None,
                  scalers: Optional[Dict[str, TensorScaler]] = None, output_dir: Optional[Union[str, Path]] = "./runs",
                  optimizer: Optional[Optimizer] = None, scheduler: Optional[_LRScheduler] = None,
                  criterion: Optional[nn.Module] = None, device: str = "cuda" if torch.cuda.is_available() else "cpu"):
@@ -334,8 +334,8 @@ class BaseTrainer:
 
         Args:
             model (nn.Module): The neural network.
-            max_epochs (int): Maximum training epochs, defaults to 100.
             lr (float): Initial learning rate for the optimizer, defaults to 1e-3.
+            max_epochs (int): Maximum training epochs, defaults to 100.
             patience (int): Epochs to wait before early stopping if no improvement, defaults to max_epochs.
             scalers (Optional[Dict[str, TensorScaler]]): Dictionary of scalers to save.
             output_dir (Union[str, Path]): Directory to save artifacts, defaults to "./runs".
@@ -346,19 +346,21 @@ class BaseTrainer:
         """
         self.device = torch.device(device)
         self.model = model.to(self.device)
+
+        self.scalers = scalers
+
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.scalers =  scalers
-        self.lr = lr
-        self.optimizer = optimizer if optimizer else Adam(self.model.parameters(), lr=self.lr)
+        self.optimizer = optimizer if optimizer else Adam(self.model.parameters(), lr=lr)
         self.scheduler = scheduler
         self.criterion = criterion if criterion else nn.MSELoss()
 
+        self.current_epoch = 0
         self.max_epochs = max_epochs
         self.patience = patience if patience else max_epochs
-        self.current_epoch = 0
-        self.best_loss = float('inf')
+
+        self.best_loss = float("inf")
         self.history: List[Dict[str, Any]] = []
 
     def _compute_loss(self, batch: Any) -> Tensor:
@@ -447,7 +449,7 @@ class BaseTrainer:
         start_time = time.time()
         patience_counter = 0
 
-        for epoch in range(self.current_epoch, self.max_epochs):
+        for epoch in range(self.max_epochs):
             self.current_epoch = epoch + 1
             ep_start = time.time()
 
@@ -527,6 +529,7 @@ class AutoregressiveTrainer(BaseTrainer):
 
     def __init__(self, model: nn.Module,
                  # optimization params
+                 lr: float = 1e-3, max_epochs: int = 500,
                  weight_decay: float = 1e-5, eta_min: float = 1e-6,
                  # curriculum params
                  max_rollout_steps: int = 5, curr_patience: int = 10, curr_sensitivity: float = 0.01,
@@ -536,8 +539,8 @@ class AutoregressiveTrainer(BaseTrainer):
         """
         Args:
             model (nn.Module): The neural network.
-            weight_decay: AdamW parameters.
-            eta_min: CosineAnnealingLR parameters.
+            lr, weight_decay: AdamW parameters.
+            max_epochs, eta_min: CosineAnnealingLR parameters.
             max_rollout_steps (int): Max steps for autoregressive rollout.
             curr_patience (int): Epochs of stable loss to trigger curriculum advance.
             curr_sensitivity (float): Threshold for loss improvement.
@@ -553,19 +556,18 @@ class AutoregressiveTrainer(BaseTrainer):
 
         # default optimizer: AdamW
         if optimizer is None:
-            optimizer = AdamW(model.parameters(), lr=self.lr, weight_decay=weight_decay)
+            optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
         # default scheduler: CosineAnnealingLR
         if scheduler is None:
-            scheduler = CosineAnnealingLR(
-                optimizer, T_max=self.max_epochs, eta_min=eta_min
-            )
+            scheduler = CosineAnnealingLR(optimizer, T_max=max_epochs, eta_min=eta_min)
 
         # default criterion: NMSE
         if criterion is None:
             criterion = NMSELoss()
 
-        super().__init__(model, optimizer=optimizer, scheduler=scheduler, criterion=criterion, **kwargs)
+        super().__init__(model, lr=lr, max_epochs=max_epochs,
+                         optimizer=optimizer, scheduler=scheduler, criterion=criterion, **kwargs)
 
         # 2. Store hyperparameters
         self.max_rollout_steps = max_rollout_steps
@@ -590,7 +592,7 @@ class AutoregressiveTrainer(BaseTrainer):
         if self.prev_val_loss == float("inf") or self.prev_val_loss < 1e-9:
             rel_improv = 0.0
         else:
-            rel_improv = self.prev_val_loss - val_loss / self.prev_val_loss
+            rel_improv = (self.prev_val_loss - val_loss) / self.prev_val_loss
 
         self.prev_val_loss = val_loss
 

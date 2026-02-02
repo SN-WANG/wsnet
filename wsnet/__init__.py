@@ -5,6 +5,6 @@ Core Architecture: Algorithms & Utilities & Applications.
 """
 
 
-__version__ = "1.9.4"
+__version__ = "1.9.5"
 __author__ = "Shengning Wang (王晟宁)"
 __email__ = "snwang2023@163.com"
