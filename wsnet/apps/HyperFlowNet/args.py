@@ -50,13 +50,13 @@ def get_args() -> argparse.Namespace:
                         help="Number of Fourier modes to keep per dimension.")
     parser.add_argument("--latent_grid_size", type=int, nargs='+', default=[64, 64], 
                         help="Resolution of the latent grid for spectral convolutions.")
-    parser.add_argument("--depth", type=int, default=2, 
+    parser.add_argument("--depth", type=int, default=4, 
                         help="Number of stacked FNO blocks.")
-    parser.add_argument("--width", type=int, default=64, 
+    parser.add_argument("--width", type=int, default=128, 
                         help="Number of hidden channels in the FNO blocks.")
 
     # Deformation Net Params
-    parser.add_argument("--deform_layers", type=int, default=2, 
+    parser.add_argument("--deform_layers", type=int, default=3, 
                         help="Number of layers in the coordinate deformation network.")
     parser.add_argument("--deform_hidden", type=int, default=32, 
                         help="Hidden dimension size for the deformation network.")
