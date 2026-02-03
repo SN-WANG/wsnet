@@ -50,13 +50,13 @@ def get_args() -> argparse.Namespace:
                         help="Number of Fourier modes to keep per dimension.")
     parser.add_argument("--latent_grid_size", type=int, nargs='+', default=[64, 64], 
                         help="Resolution of the latent grid for spectral convolutions.")
-    parser.add_argument("--depth", type=int, default=3, 
+    parser.add_argument("--depth", type=int, default=2, 
                         help="Number of stacked FNO blocks.")
-    parser.add_argument("--width", type=int, default=128, 
+    parser.add_argument("--width", type=int, default=64, 
                         help="Number of hidden channels in the FNO blocks.")
 
     # Deformation Net Params
-    parser.add_argument("--deform_layers", type=int, default=3, 
+    parser.add_argument("--deform_layers", type=int, default=2, 
                         help="Number of layers in the coordinate deformation network.")
     parser.add_argument("--deform_hidden", type=int, default=32, 
                         help="Hidden dimension size for the deformation network.")
@@ -80,9 +80,9 @@ def get_args() -> argparse.Namespace:
     # curriculum
     parser.add_argument("--max_rollout_steps", type=int, default=20, 
                         help="Maximum autoregressive rollout steps allowed.")
-    parser.add_argument("--curr_patience", type=int, default=30, 
+    parser.add_argument("--curr_patience", type=int, default=10, 
                         help="Epochs of stable loss required to increase rollout difficulty.")
-    parser.add_argument("--curr_sensitivity", type=float, default=0.01, 
+    parser.add_argument("--curr_sensitivity", type=float, default=0.05, 
                         help="Relative improvement threshold to consider loss as 'stable'.")
     parser.add_argument("--noise_std_init", type=float, default=0.01, 
                         help="Initial Std dev of Gaussian noise injected into input state.")

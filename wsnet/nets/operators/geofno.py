@@ -280,8 +280,11 @@ class GeoFNO(nn.Module):
         else:
             self.deformation_net = None
 
-        # P: Lifting layer (Input -> Hidden). Concatenates feature + spatial coordinates
-        self.fc_lift = nn.Linear(in_channels + self.spatial_dim, width)
+        # # P: Lifting layer (Input -> Hidden). Concatenates feature + spatial coordinates
+        # self.fc_lift = nn.Linear(in_channels + self.spatial_dim, width)
+
+        # P: Lifting layer (Input -> Hidden).
+        self.fc_lift = nn.Linear(in_channels, width)
 
         # FNO layers (Processing in latent space)
         self.fno_blocks = nn.ModuleList([FNOBlock(width, modes) for _ in range(depth)])
@@ -402,10 +405,13 @@ class GeoFNO(nn.Module):
         - Tensor: Prediction at nodes. Shape (batch_size, num_nodes, out_channels)
         """
         # 1. Lifting (P) and Deformation
-        # Shape: (batch_size, num_nodes, in_channels + spatial_dim)
-        input_lift = torch.cat([input_features, physical_coords], dim=-1)
+        # # Shape: (batch_size, num_nodes, in_channels + spatial_dim)
+        # input_lift = torch.cat([input_features, physical_coords], dim=-1)
+        # # Shape: (batch_size, num_nodes, width)
+        # lifted_features = self.fc_lift(input_lift)
+
         # Shape: (batch_size, num_nodes, width)
-        lifted_features = self.fc_lift(input_lift)
+        lifted_features = self.fc_lift(input_features)
 
         if self.spatial_dim > 1 and self.deformation_net is not None:
             # Shape: (batch_size, num_nodes, spatial_dim)
