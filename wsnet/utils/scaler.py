@@ -20,11 +20,8 @@ class BaseScaler:
         Fits the scaler statistics from data.
 
         Args:
-            x (np.ndarray):
-                Input data array.
-                Shape: (num_samples, ..., num_channels)
-            channel_dim (int):
-                Dimension index representing feature/channel dimension.
+            x (np.ndarray): Input data array. Shape: (num_samples, ..., num_channels)
+            channel_dim (int): Dimension index representing channel dimension.
 
         Returns:
             BaseScaler: Self instance for method chaining.
@@ -36,13 +33,10 @@ class BaseScaler:
         Transforms input data using fitted statistics.
 
         Args:
-            x (np.ndarray):
-                Input data array.
-                Shape must match data passed to fit().
+            x (np.ndarray): Input data array. Shape must match data passed to fit().
 
         Returns:
-            np.ndarray:
-                Scaled data with the same shape and dtype as input.
+            np.ndarray: Scaled data with the same shape and dtype as input.
         """
         raise NotImplementedError
 
@@ -51,13 +45,10 @@ class BaseScaler:
         Inversely transforms scaled data back to original space.
 
         Args:
-            x (np.ndarray):
-                Scaled data array.
-                Shape must match data passed to transform().
+            x (np.ndarray): Scaled data array. Shape must match data passed to transform().
 
         Returns:
-            np.ndarray:
-                Data restored to original scale.
+            np.ndarray: Data restored to original scale.
         """
         raise NotImplementedError
 
@@ -111,11 +102,8 @@ class StandardScalerNP(BaseScaler):
         Computes mean and standard deviation for standardization.
 
         Args:
-            x (np.ndarray):
-                Input data.
-                Shape: (num_samples, ..., num_channels)
-            channel_dim (int):
-                Feature/channel dimension.
+            x (np.ndarray): Input data. Shape: (num_samples, ..., num_channels)
+            channel_dim (int): Dimension index representing channel dimension.
 
         Returns:
             StandardScalerNP: Self instance.
@@ -140,13 +128,10 @@ class StandardScalerNP(BaseScaler):
         Applies standardization to input data.
 
         Args:
-            x (np.ndarray):
-                Input data.
-                Shape matches fit() input.
+            x (np.ndarray): Input data. Shape matches fit() input.
 
         Returns:
-            np.ndarray:
-                Standardized data.
+            np.ndarray: Standardized data.
         """
         if self.mean is None or self.std is None:
             raise RuntimeError("Scaler has not been fitted.")
@@ -158,13 +143,10 @@ class StandardScalerNP(BaseScaler):
         Restores standardized data to original scale.
 
         Args:
-            x (np.ndarray):
-                Standardized data.
-                Shape matches transform() input.
+            x (np.ndarray): Standardized data. Shape matches transform() input.
 
         Returns:
-            np.ndarray:
-                Original scale data.
+            np.ndarray: Original scale data.
         """
         if self.mean is None or self.std is None:
             raise RuntimeError("Scaler has not been fitted.")
@@ -205,10 +187,9 @@ class MinMaxScalerNP(BaseScaler):
         Initializes the MinMaxScalerNP.
 
         Args:
-            feature_range (Literal):
-                Target normalization range.
-                    - "unit" -> [0, 1]
-                    - "bipolar" -> [-1, 1]
+            feature_range (Literal): Target normalization range.
+                - "unit" -> [0, 1]
+                - "bipolar" -> [-1, 1]
             eps (float): Small constant to avoid division by zero.
         """
         self.feature_range = feature_range
@@ -229,11 +210,8 @@ class MinMaxScalerNP(BaseScaler):
         Computes min and max statistics for normalization.
 
         Args:
-            x (np.ndarray):
-                Input data.
-                Shape: (num_samples, ..., num_channels)
-            channel_dim (int):
-                Feature/channel dimension.
+            x (np.ndarray): Input data. Shape: (num_samples, ..., num_channels)
+            channel_dim (int): Dimension index representing channel dimension.
 
         Returns:
             MinMaxScalerNP: Self instance.
@@ -255,13 +233,10 @@ class MinMaxScalerNP(BaseScaler):
         Applies min-max normalization.
 
         Args:
-            x (np.ndarray):
-                Input data.
-                Shape matches fit() input.
+            x (np.ndarray): Input data. Shape matches fit() input.
 
         Returns:
-            np.ndarray:
-                Normalized data.
+            np.ndarray: Normalized data.
         """
         if self.data_min is None or self.data_max is None:
             raise RuntimeError("Scaler has not been fitted.")
@@ -276,13 +251,10 @@ class MinMaxScalerNP(BaseScaler):
         Restores normalized data to original scale.
 
         Args:
-            x (np.ndarray):
-                Normalized data.
-                Shape matches transform() input.
+            x (np.ndarray): Normalized data. Shape matches transform() input.
 
         Returns:
-            np.ndarray:
-                Original scale data.
+            np.ndarray: Original scale data.
         """
         if self.data_min is None or self.data_max is None:
             raise RuntimeError("Scaler has not been fitted.")

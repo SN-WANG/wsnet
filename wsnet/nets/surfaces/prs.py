@@ -1,179 +1,132 @@
 # Polynomial Regression Surface (PRS) Surrogate Model
 # Author: Shengning Wang
 
-import os
-import sys
 import numpy as np
-from sklearn.preprocessing import PolynomialFeatures, StandardScaler
-from sklearn.linear_model import Ridge, LinearRegression
-from sklearn.metrics import mean_squared_error, r2_score
-from typing import Dict, Tuple, Union, Optional
+from itertools import combinations_with_replacement
 
-
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-from wsnet.utils.engine import sl, logger
+from wsnet.utils.scaler import StandardScalerNP
 
 
 class PRS:
     """
-    Polynomial Regression Surface (PRS) Surrogate Model.
-
-    Utilizes polynomial feature expansion followed by linear (or ridge) regression.
-
-    Attributes:
-    - degree (int): The degree of the polynomial features.
-    - alpha (float): Regularization strength for Ridge regression (0.0 for OLS).
-    - model (Union[Ridge, LinearRegression]): The underlying regressor.
-    - poly_trans (PolynomialFeatures): Feature transformer.
-    - scaler_x (StandardScaler): Preprocessor for features.
-    - scaler_y (StandardScaler): Preprocessor for targets.
-    - is_fitted (bool): Status flag.
+    Polynomial Regression Surface (PRS) surrogate model.
     """
 
     def __init__(self, degree: int = 3, alpha: float = 0.0):
         """
-        Initializes the PRS model configuration.
-
         Args:
-        - degree (int): The degree of the polynomial features.
-        - alpha (float): Regularization strength. If 0.0, uses LinearRegression. If > 0.0, uses Ridge regression.
+            degree (int): Polynomial degree.
+            alpha (float): Ridge regularization strength.
         """
         self.degree = degree
         self.alpha = alpha
 
-        # Initialize components
-        self.poly_trans = PolynomialFeatures(degree=degree)
-        self.scaler_x = StandardScaler()
-        self.scaler_y = StandardScaler()
+        self.scaler_x = StandardScalerNP()
+        self.scaler_y = StandardScalerNP()
 
-        # Select internal regressor based on regularization
-        if self.alpha > 0:
-            self.model = Ridge(alpha=self.alpha)
-        else:
-            self.model = LinearRegression()
+        self.powers: np.ndarray = None
+        self.weights: np.ndarray = None
 
-        self.is_fitted = False
+    # ------------------------------------------------------------------
+
+    def _generate_powers(self, input_dim: int) -> np.ndarray:
+        """
+        Generates exponent combinations for full polynomial basis.
+
+        Args:
+            input_dim (int): Dimension of input.
+
+        Returns:
+            np.ndarray: Exponent matrix. Shape: (num_terms, input_dim)
+        """
+        powers = []
+        for d in range(self.degree + 1):
+            for comb in combinations_with_replacement(range(input_dim), d):
+                power = np.zeros(input_dim, dtype=np.int64)
+                for idx in comb:
+                    power[idx] += 1
+                powers.append(power)
+
+        return np.stack(powers, axis=0)
+
+    # ------------------------------------------------------------------
+
+    def _build_features(self, x: np.ndarray) -> np.ndarray:
+        """
+        Constructs polynomial feature matrix.
+
+        Args:
+            x (np.ndarray): Inputs. Shape: (num_samples, input_dim)
+
+        Returns:
+            np.ndarray: Feature matrix. Shape: (num_samples, num_terms)
+        """
+        num_samples, input_dim = x.shape
+        num_terms = self.powers.shape[0]
+
+        phi = np.ones((num_samples, num_terms), dtype=x.dtype)
+
+        for d in range(input_dim):
+            exp_d = self.powers[:, d]
+            mask = exp_d > 0
+            if not np.any(mask): continue
+
+            phi[:, mask] *= (x[:, d:d+1] ** exp_d[mask])
+
+        return phi
+
+    # ------------------------------------------------------------------
 
     def fit(self, x_train: np.ndarray, y_train: np.ndarray) -> None:
         """
-        Trains the Polynomial Regression Surface (PRS) Surrogate Model.
+        Performs model training.
 
         Args:
-        - x_train (np.ndarray): Training feature data (num_samples, num_features).
-        - y_train (np.ndarray): Training target data (num_samples, num_outputs).
+            x_train (np.ndarray): Training inputs. Shape: (num_samples, input_dim)
+            y_train (np.ndarray): Training targets. Shape: (num_samples, target_dim)
         """
         if x_train.ndim == 1:
-            x_train = x_train.reshape(-1, 1)
+            x_train = x_train[:, None]
         if y_train.ndim == 1:
-            y_train = y_train.reshape(-1, 1)
+            y_train = y_train[:, None]
 
-        # 1. Preprocessing: scale train features and targets
-        x_scaled = self.scaler_x.fit_transform(x_train)
-        y_scaled = self.scaler_y.fit_transform(y_train)
+        x_scaled = self.scaler_x.fit(x_train, channel_dim=1).transform(x_train)
+        y_scaled = self.scaler_y.fit(y_train, channel_dim=1).transform(y_train)
 
-        # logger.info(f'training PRS (degree={self.degree}, alpha={self.alpha})...')
+        input_dim = x_scaled.shape[1]
+        self.powers = self._generate_powers(input_dim)
+        phi = self._build_features(x_scaled)
 
-        # 2. Feature Transformation: Polynomial expansion
-        x_poly = self.poly_trans.fit_transform(x_scaled)
+        xtx = phi.T @ phi
+        xty = phi.T @ y_scaled
 
-        # 3. Model Training
-        self.model.fit(x_poly, y_scaled)
-        self.is_fitted = True
+        if self.alpha > 0.0:
+            np.fill_diagonal(xtx, xtx.diagonal() + self.alpha)
 
-        # logger.info(f'{sl.g}PRS training completed.{sl.q}')
+        self.weights = np.linalg.solve(xtx, xty)
 
-    def predict(self, x_test: np.ndarray, y_test: Optional[np.ndarray] = None
-                ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
+    # ------------------------------------------------------------------
+
+    def predict(self, x_pred: np.ndarray) -> np.ndarray:
         """
-        Predicts using the trained model.
+        Performs model prediction.
 
         Args:
-        - x_test (np.ndarray): Test feature data (num_samples, num_features).
-        - y_test (Optional[np.ndarray]): Test target data (num_samples, num_outputs).
+            x_pred (np.ndarray): Prediction inputs. Shape: (num_samples, input_dim)
 
         Returns:
-        - Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
-        - If y_test is available: Returns a Tuple: (y_pred, metrics)
-        - If y_test is None: Returns only y_pred
-
-        - y_pred (np.ndarray): Predicted target values
-        - metrics (Dict[str, float]): Dictionary of evaluation metrics
+            np.ndarray: Prediction targets. Shape: (num_samples, target_dim)
         """
-        if x_test.ndim == 1:
-            x_test = x_test.reshape(-1, 1)
-        if y_test is not None and y_test.ndim == 1:
-            y_test = y_test.reshape(-1, 1)
+        if self.weights is None or self.powers is None:
+            raise RuntimeError("Model has not been fitted.")
 
-        # 1. Preprocessing: scale test features
-        if not self.is_fitted:
-            raise RuntimeError('Model not fitted. Please call fit() first.')
+        if x_pred.ndim == 1:
+            x_pred = x_pred[:, None]
 
-        x_test_scaled = self.scaler_x.transform(x_test)
+        x_scaled = self.scaler_x.transform(x_pred)
+        phi = self._build_features(x_scaled)
 
-        # 2. Feature Transformation: Polynomial expansion
-        x_poly = self.poly_trans.transform(x_test_scaled)
+        y_scaled = phi @ self.weights
+        y_pred = self.scaler_y.inverse_transform(y_scaled)
 
-        # 3. Perform predictions: predict on test points
-        # logger.info(f'predicting PRS (degree={self.degree}, alpha={self.alpha})...')
-        y_pred_scaled = self.model.predict(x_poly)
-
-        # logger.info(f'{sl.g}PRS prediction completed.{sl.q}')
-
-        # 4. Inverse Scaling: Convert back to original space
-        if y_pred_scaled.ndim == 1:
-            y_pred_scaled = y_pred_scaled.reshape(-1, 1)
-        y_pred = self.scaler_y.inverse_transform(y_pred_scaled)
-
-        # 5.1 Inference Mode
-        if y_test is None: return y_pred
-
-        # 5.2 Evaluation Mode
-        r2 = r2_score(y_test, y_pred)
-        mse = mean_squared_error(y_test, y_pred)
-        rmse = np.sqrt(mse)
-
-        metrics = {"r2": r2, "mse": mse, "rmse": rmse}
-
-        return y_pred, metrics
-
-
-# ======================================================================
-# Example Usage
-# ======================================================================
-if __name__ == '__main__':
-    # Simulate data
-    np.random.seed(42)
-    N = 100
-    x = np.random.rand(N, 2) * 10
-
-    # Branin function
-    y1 = 1.0 * (x[:, 1] - 5.1 / (4.0 * np.pi**2) * x[:, 0]**2 + 5.0 / np.pi * x[:, 0] - 6.0)**2 + \
-    10.0 * (1 - 1.0 / (8.0 * np.pi)) * np.cos(x[:, 0]) + 10.0
-
-    # Simple interaction
-    y2 = x[:, 0] * x[:, 1] + np.sin(x[:, 0]) * 10
-
-    y = np.stack([y1, y2], axis=1)
-
-    # Split data into training and testing sets (8/2 split)
-    split_idx = int(0.8 * N)
-    x_train, x_test = x[:split_idx], x[split_idx:]
-    y_train, y_test = y[:split_idx], y[split_idx:]
-
-    # Instantiate model
-    model = PRS()
-
-    # Train model
-    model.fit(x_train, y_train)
-
-    # Test model
-    y_pred, test_metrics = model.predict(x_test, y_test)
-
-    # Log results
-    logger.info(f'Testing R2: {sl.m}{test_metrics['r2']:.9f}{sl.q}')
-    logger.info(f'Testing MSE: {sl.m}{test_metrics['mse']:.9f}{sl.q}')
-    logger.info(f'Testing RMSE: {sl.m}{test_metrics['rmse']:.9f}{sl.q}')
+        return y_pred
