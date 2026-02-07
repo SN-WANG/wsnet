@@ -1,178 +1,214 @@
 # Support Vector Regression (SVR) Surrogate Model
 # Author: Shengning Wang
 
-import os
-import sys
 import numpy as np
-from sklearn.svm import SVR as SklearnSVR
-from sklearn.multioutput import MultiOutputRegressor
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, r2_score
-from typing import Dict, Tuple, Union, Optional
+from scipy.optimize import minimize, Bounds
+from typing import Tuple, Optional, Literal
 
-
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-from wsnet.utils.engine import sl, logger
+from wsnet.utils.scaler import StandardScalerNP
 
 
 class SVR:
     """
-    Support Vector Regression (SVR) Surrogate Model.
-
-    Wraps sklearn's SVR in a MultiOutputRegressor to handle multiple output dimensions.
-
-    Attributes:
-    - kernel (str): Kernel type ('rbf', 'linear', 'poly', 'sigmoid').
-    - gamma (Union[str, float]): Kernel coefficient. Controls the influence radius.
-                                 'scale' (default) uses 1 / (num_features * x.var()).
-    - C (float): Regularization parameter. The strength of the regularization is inversely proportional to C.
-    - epsilon (float): Epsilon-tube width. Defines the margin of tolerance where no penalty is associated with errors.
-    - model (MultiOutputRegressor): The multi-output wrapper around SVR.
-    - scaler_x (StandardScaler): Preprocessor for features.
-    - scaler_y (StandardScaler): Preprocessor for targets.
-    - is_fitted (bool): Status flag.
+    Support Vector Regression (SVR) using Dual Optimization with epsilon-insensitive loss.
     """
 
-    def __init__(self, kernel: str = 'rbf', gamma: Union[str, float] = 'scale', C: float = 1.0, epsilon: float = 0.1):
+    def __init__(self, kernel: Literal["rbf", "linear"] = "rbf", gamma: Optional[float] = None,
+                 C: float = 1.0, epsilon: float = 0.1):
         """
-        Initializes the SVR model configuration.
+        Initializes the SVR configuration.
 
         Args:
-        - kernel (str): Specifies the kernel type.
-        - gamma (Union[str, float]): Kernel coefficient.
-        - C (float): Regularization parameter.
-        - epsilon (float): Epsilon-tube width.
+            kernel (str): Kernel type ("rbf" or "linear").
+            gamma (Optional[float]): Kernel coefficient for rbf.
+            C (float): Regularization parameter (penalty).
+            epsilon (float): Epsilon-tube width (tolerance margin).
         """
+        # parameters
         self.kernel = kernel
         self.gamma = gamma
         self.C = C
         self.epsilon = epsilon
 
-        self.scaler_x = StandardScaler()
-        self.scaler_y = StandardScaler()
+        # scalers
+        self.scaler_x = StandardScalerNP()
+        self.scaler_y = StandardScalerNP()
 
-        self.model = None
-        self.is_fitted = False
+        # model state
+        self.support_vectors_: Optional[np.ndarray] = None
+        self.dual_coef_: Optional[np.ndarray] = None
+        self.intercept_: Optional[np.ndarray] = None
+        self.fitted = False
 
-    def fit(self, x_train: np.ndarray, y_train: np.ndarray):
+    # ------------------------------------------------------------------
+
+    def _build_features(self, x1: np.ndarray, x2: np.ndarray) -> np.ndarray:
         """
-        Trains the Support Vector Regression (SVR) Surrogate Model.
+        Constructs SVR feature matrix.
 
         Args:
-        - x_train (np.ndarray): Training feature data (num_samples, num_features).
-        - y_train (np.ndarray): Training target data (num_samples, num_outputs).
-        """
-        if x_train.ndim == 1:
-            x_train = x_train.reshape(-1, 1)
-        if y_train.ndim == 1:
-            y_train = y_train.reshape(-1, 1)
-
-        # 1. Initialize base SVR
-        svr_estimator = SklearnSVR(kernel=self.kernel, gamma=self.gamma, C=self.C, epsilon=self.epsilon)
-        self.model = MultiOutputRegressor(svr_estimator, n_jobs=-1)
-
-        # 2. Preprocessing: Scale x and y
-        x_scaled = self.scaler_x.fit_transform(x_train)
-        y_scaled = self.scaler_y.fit_transform(y_train)
-
-        # logger.info(f"training SVR (kernel={self.kernel}, gamma={self.gamma}, "
-                    # f"c={self.C}, epsilon={self.epsilon})...")
-
-        # 3. Model Training
-        self.model.fit(x_scaled, y_scaled)
-        self.is_fitted = True
-
-        # logger.info(f'{sl.g}SVR training completed.{sl.q}')
-
-    def predict(self, x_test: np.ndarray, y_test: Optional[np.ndarray] = None
-                ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
-        """
-        Predicts using the trained model.
-
-        Args:
-        - x_test (np.ndarray): Test feature data (num_samples, num_features).
-        - y_test (Optional[np.ndarray]): Test target data (num_samples, num_outputs).
+            x1 (np.ndarray): Shape (num_samples_1, input_dim)
+            x2 (np.ndarray): Shape (num_samples_2, input_dim)
 
         Returns:
-        - Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
-        - If y_test is available: Returns a Tuple: (y_pred, metrics)
-        - If y_test is None: Returns only y_pred
-
-        - y_pred (np.ndarray): Predicted target values
-        - metrics (Dict[str, float]): Dictionary of evaluation metrics
+            np.ndarray: Feature matrix. Shape: (num_samples_1, num_samples_2)
         """
-        if x_test.ndim == 1:
-            x_test = x_test.reshape(-1, 1)
-        if y_test is not None and y_test.ndim == 1:
-            y_test = y_test.reshape(-1, 1)
+        if self.kernel == "linear":
+            return x1 @ x2.T
+        elif self.kernel == "rbf":
+            # pairwise squared euclidean distance
+            dists = np.sum(x1**2, axis=1, keepdims=True) + np.sum(x2**2, axis=1) - 2.0 * (x1 @ x2.T)
+            return np.exp(-self.gamma * dists)
+        else:
+            raise ValueError(f"Unsupported kernel: {self.kernel}")
 
-        # 1. Preprocessing: scale test features
-        if not self.is_fitted:
-            raise RuntimeError('Model not fitted. Please call fit() first.')
+    # ------------------------------------------------------------------
 
-        x_test_scaled = self.scaler_x.transform(x_test)
+    def _solve_dual(self, phi: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, float]:
+        """
+        Solves the dual QP problem for a single output dimension.
 
-        # 2. Perform predictions: predict on test points
-        # logger.info(f"predicting SVR (kernel={self.kernel}, gamma={self.gamma}, "
-                    # f"c={self.C}, epsilon={self.epsilon})...")
-        y_pred_scaled = self.model.predict(x_test_scaled)
-        # logger.info(f'{sl.g}SVR prediction completed.{sl.q}')
+        Minimize: 0.5 * beta^T @ phi @ beta - beta^T @ y + epsilon * |beta|
+        Subject to: sum(beta) = 0, -C <= beta <= C
+        Note: beta = alpha - alpha*
 
-        # 3. Inverse Scaling: Convert back to original space
-        if y_pred_scaled.ndim == 1:
-            y_pred_scaled = y_pred_scaled.reshape(-1, 1)
-        y_pred = self.scaler_y.inverse_transform(y_pred_scaled)
+        Args:
+            phi (np.ndarray): Feature matrix (num_samples, num_samples).
+            y (np.ndarray): Target vector (num_samples,).
 
-        # 4.1 Inference Mode
-        if y_test is None: return y_pred
+        Returns:
+            Tuple[np.ndarray, float]: Dual coefficients (beta) and intercept (bias).
+        """
+        num_samples = y.shape[0]
 
-        # 4.2 Evaluation Mode
-        r2 = r2_score(y_test, y_pred)
-        mse = mean_squared_error(y_test, y_pred)
-        rmse = np.sqrt(mse)
+        # optimization objective (using dual form derivation)
+        # we optimize x = [alpha; alpha*] to adhere to standard QP form strictly
+        # variables: x = [alpha_1, ..., alpha_n, alpha*_1, ..., alpha*_n] (size 2*n)
 
-        metrics = {"r2": r2, "mse": mse, "rmse": rmse}
+        def objective(x):
+            alpha, alpha_star = x[:num_samples], x[num_samples:]
+            beta = alpha - alpha_star
 
-        return y_pred, metrics
+            # quadratic term: 0.5 * beta.T @ phi @ beta
+            term1 = 0.5 * beta @ phi @ beta
 
+            # linear term: epsilon * sum(alpha + alpha*) - beta.T @ y
+            term2 = self.epsilon * np.sum(alpha + alpha_star) - y @ beta
 
-# ======================================================================
-# Example Usage
-# ======================================================================
-if __name__ == '__main__':
-    # Simulate data
-    np.random.seed(42)
-    N = 100
-    x = np.random.rand(N, 2) * 10
+            return term1 + term2
 
-    # Branin function
-    y1 = 1.0 * (x[:, 1] - 5.1 / (4.0 * np.pi**2) * x[:, 0]**2 + 5.0 / np.pi * x[:, 0] - 6.0)**2 + \
-    10.0 * (1 - 1.0 / (8.0 * np.pi)) * np.cos(x[:, 0]) + 10.0
+        # manually providing jacobian to speed up SLSQP by avoiding finite difference
+        def jacobian(x):
+            alpha, alpha_star = x[:num_samples], x[num_samples:]
+            beta = alpha - alpha_star
+            grad_base = phi @ beta - y
+            grad_alpha = grad_base + self.epsilon
+            grad_alpha_star = -grad_base + self.epsilon
+            return np.concatenate([grad_alpha, grad_alpha_star])
 
-    # Simple interaction
-    y2 = x[:, 0] * x[:, 1] + np.sin(x[:, 0]) * 10
+        # constraints: sum(alpha - alpha*) = 0
+        constraints = [{"type": "eq", "fun": lambda x: np.sum(x[:num_samples] - x[num_samples:])}]
 
-    y = np.stack([y1, y2], axis=1)
+        # bounds: 0 <= alpha, alpha* <= C
+        bounds = Bounds(np.zeros(2 * num_samples), np.full(2 * num_samples, self.C))
 
-    # Split data into training and testing sets (8/2 split)
-    split_idx = int(0.8 * N)
-    x_train, x_test = x[:split_idx], x[split_idx:]
-    y_train, y_test = y[:split_idx], y[split_idx:]
+        # initial guess
+        x0 = np.zeros(2 * num_samples)
 
-    # Instantiate model
-    model = SVR()
+        # solve QP
+        res = minimize(fun=objective, x0=x0, method="SLSQP", jac=jacobian, bounds=bounds, constraints=constraints,
+                       options={"ftol": 1e-6, "maxiter": 200})
 
-    # Train model
-    model.fit(x_train, y_train)
+        if not res.success:
+            # warning: optimization might fail on hard problems, fallback or log could be added
+            pass
 
-    # Test model
-    y_pred, test_metrics = model.predict(x_test, y_test)
+        alpha_final, alpha_star_final = np.split(res.x, 2)
+        beta = alpha_final - alpha_star_final
 
-    # Log results
-    logger.info(f'Testing R2: {sl.m}{test_metrics['r2']:.9f}{sl.q}')
-    logger.info(f'Testing MSE: {sl.m}{test_metrics['mse']:.9f}{sl.q}')
-    logger.info(f'Testing RMSE: {sl.m}{test_metrics['rmse']:.9f}{sl.q}')
+        # threshold small values to zero (sparsity)
+        beta[np.abs(beta) < 1e-5] = 0.0
+
+        # compute intercept (bias) using support vectors
+        # sv_indices: 0 < alpha < C  OR  0 < alpha* < C
+        # robustly: use free support vectors (not at bounds)
+        sv_mask = (np.abs(beta) > 1e-5) & (np.abs(beta) < self.C - 1e-5)
+
+        if np.any(sv_mask):
+            # b = y - phi @ beta - sign(beta) * epsilon
+            biases = y[sv_mask] - phi[sv_mask] @ beta - np.sign(beta[sv_mask]) * self.epsilon
+
+            # take mean for numerical stability
+            intercept = np.mean(biases)
+        else:
+            # fallback if no free support vectors are found
+            intercept = 0.0
+
+        return beta, intercept
+
+    # ------------------------------------------------------------------
+
+    def fit(self, x_train: np.ndarray, y_train: np.ndarray) -> None:
+        """
+        Performs model training.
+
+        Args:
+            x_train (np.ndarray): Training inputs. Shape: (num_samples, input_dim).
+            y_train (np.ndarray): Training targets. Shape: (num_samples, target_dim).
+        """
+        if x_train.ndim == 1:
+            x_train = x_train[:, None]
+        if y_train.ndim == 1:
+            y_train = y_train[:, None]
+
+        x_scaled = self.scaler_x.fit(x_train, channel_dim=1).transform(x_train)
+        y_scaled = self.scaler_y.fit(y_train, channel_dim=1).transform(y_train)
+
+        if self.gamma is None:
+            x_var = x_scaled.var()
+            self.gamma = 1.0 / (x_scaled.shape[1] * x_var) if x_var > 0 else 1.0
+
+        phi = self._build_features(x_scaled, x_scaled)
+
+        # storage for multi-target
+        num_samples, target_dim = y_scaled.shape
+        self.dual_coef_ = np.zeros((num_samples, target_dim))
+        self.intercept_ = np.zeros(target_dim)
+        self.support_vectors_ = x_scaled  # store scaled support vectors
+
+        # fit per target dimension
+        for d in range(target_dim):
+            beta, bias = self._solve_dual(phi, y_scaled[:, d])
+            self.dual_coef_[:, d] = beta
+            self.intercept_[d] = bias
+
+        self.fitted = True
+
+    # ------------------------------------------------------------------
+
+    def predict(self, x_pred: np.ndarray) -> np.ndarray:
+        """
+        Performs model prediction.
+
+        Args:
+            x_pred (np.ndarray): Prediction inputs. Shape: (num_samples, input_dim).
+
+        Returns:
+            np.ndarray: Prediction targets. Shape: (num_samples, target_dim).
+        """
+        if not self.fitted:
+            raise RuntimeError("Model has not been fitted.")
+
+        if x_pred.ndim == 1:
+            x_pred = x_pred[:, None]
+
+        x_scaled = self.scaler_x.transform(x_pred)
+        phi = self._build_features(x_scaled, self.support_vectors_)
+
+        y_scaled = phi @ self.dual_coef_ + self.intercept_
+        y_pred = self.scaler_y.inverse_transform(y_scaled)
+
+        if y_pred.shape[1] == 1:
+            y_pred = y_pred.ravel()
+
+        return y_pred

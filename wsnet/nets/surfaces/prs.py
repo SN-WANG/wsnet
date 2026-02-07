@@ -2,6 +2,7 @@
 # Author: Shengning Wang
 
 import numpy as np
+from typing import Optional
 from itertools import combinations_with_replacement
 
 from wsnet.utils.scaler import StandardScalerNP
@@ -9,7 +10,7 @@ from wsnet.utils.scaler import StandardScalerNP
 
 class PRS:
     """
-    Polynomial Regression Surface (PRS) surrogate model.
+    Polynomial Regression Surface (PRS) using regularized least squares on polynomial features.
     """
 
     def __init__(self, degree: int = 3, alpha: float = 0.0):
@@ -18,14 +19,17 @@ class PRS:
             degree (int): Polynomial degree.
             alpha (float): Ridge regularization strength.
         """
+        # parameters
         self.degree = degree
         self.alpha = alpha
 
+        # scalers
         self.scaler_x = StandardScalerNP()
         self.scaler_y = StandardScalerNP()
 
-        self.powers: np.ndarray = None
-        self.weights: np.ndarray = None
+        # model state
+        self.powers: Optional[np.ndarray] = None
+        self.weights: Optional[np.ndarray] = None
 
     # ------------------------------------------------------------------
 
@@ -128,5 +132,8 @@ class PRS:
 
         y_scaled = phi @ self.weights
         y_pred = self.scaler_y.inverse_transform(y_scaled)
+
+        if y_pred.shape[1] == 1:
+            y_pred = y_pred.ravel()
 
         return y_pred

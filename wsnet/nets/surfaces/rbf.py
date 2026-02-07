@@ -2,39 +2,43 @@
 # Author: Shengning Wang
 
 import numpy as np
+from typing import Optional
 
 from wsnet.utils.scaler import StandardScalerNP
 
 
 class RBF:
     """
-    Radial Basis Function (RBF) surrogate model.
+    Radial Basis Function (RBF) using K-Means clustering and Gaussian kernels.
     """
 
-    def __init__(self, num_centers: int = 20, gamma: float = 0.1, alpha: float = 0.0, max_iter: int = 500):
+    def __init__(self, num_centers: int = 20, gamma: Optional[float] = None, alpha: float = 0.0, max_iter: int = 500):
         """
         Args:
             num_centers (int): Number of RBF centers.
-            gamma (float): Kernel width parameter.
+            gamma (Optional[float]): Kernel width parameter.
             alpha (float): Ridge regularization strength.
             max_iter (int): Maximum iterations for KMeans.
         """
+        # parameters
         self.num_centers = num_centers
         self.gamma = gamma
         self.alpha = alpha
         self.max_iter = max_iter
 
+        # scalers
         self.scaler_x = StandardScalerNP()
         self.scaler_y = StandardScalerNP()
 
-        self.centers: np.ndarray = None
-        self.weights: np.ndarray = None
+        # model state
+        self.centers: Optional[np.ndarray] = None
+        self.weights: Optional[np.ndarray] = None
 
     # ------------------------------------------------------------------
 
     def _compute_dists(self, x: np.ndarray, c: np.ndarray) -> np.ndarray:
         """
-        Computes squared Euclidean distance matrix.
+        Computes pairwise squared Euclidean distance matrix.
 
         Args:
             x (np.ndarray): Inputs. Shape: (num_samples, input_dim)
@@ -142,11 +146,8 @@ class RBF:
             self.centers = self._kmeans(x_scaled)
 
         if self.gamma is None:
-            dist = self._compute_dists(self.centers, self.centers)
-            np.fill_diagonal(dist, np.inf)
-            sigma = np.mean(np.min(dist, axis=1))
-            sigma = 1.0 if sigma <= 1e-10 else sigma
-            self.gamma = 1.0 / (2.0 * sigma**2)
+            x_var = x_scaled.var()
+            self.gamma = 1.0 / (x_scaled.shape[1] * x_var) if x_var > 0 else 1.0
 
         phi = self._build_features(x_scaled)
 
@@ -181,5 +182,8 @@ class RBF:
 
         y_scaled = phi @ self.weights
         y_pred = self.scaler_y.inverse_transform(y_scaled)
+
+        if y_pred.shape[1] == 1:
+            y_pred = y_pred.ravel()
 
         return y_pred
