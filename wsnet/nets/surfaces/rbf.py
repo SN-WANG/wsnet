@@ -38,18 +38,34 @@ class RBF:
 
     def _compute_dists(self, x: np.ndarray, c: np.ndarray) -> np.ndarray:
         """
-        Computes pairwise squared Euclidean distance matrix.
+        Compute pairwise squared Euclidean distances between two point sets.
+
+        Uses the algebraic expansion: ||x - c||^2 = ||x||^2 + ||c||^2 - 2 * x @ c^T
+        for vectorized computation without explicit loops.
 
         Args:
-            x (np.ndarray): Inputs. Shape: (num_samples, input_dim)
-            c (np.ndarray): Centers. Shape: (num_centers, input_dim)
+            x (np.ndarray): Query points of shape (num_queries, num_features), dtype: float64.
+            c (np.ndarray): Reference points of shape (num_refs, num_features), dtype: float64.
 
         Returns:
-            np.ndarray: Distance matrix. Shape: (num_samples, num_centers)
+            np.ndarray: Squared distance matrix of shape (num_queries, num_refs), dtype: float64.
+                Entry (i, j) contains the squared Euclidean distance between x[i] and c[j].
         """
-        x2 = np.sum(x**2, axis=1, keepdims=True)
-        c2 = np.sum(c**2, axis=1)
-        return x2 + c2 - 2.0 * (x @ c.T)
+        # Compute squared L2 norms for each point set: (num_queries, 1) and (num_refs,)
+        x_norm_sq = np.sum(x ** 2, axis=1, keepdims=True)  # Shape: (num_queries, 1)
+        c_norm_sq = np.sum(c ** 2, axis=1)                 # Shape: (num_refs,)
+
+        # Compute cross term: 2 * x @ c^T, shape: (num_queries, num_refs)
+        cross_term = 2.0 * (x @ c.T)
+
+        # Combine: ||x||^2 + ||c||^2 - 2 * x @ c^T
+        # Broadcasting: (num_queries, 1) + (num_refs,) -> (num_queries, num_refs)
+        dists_sq = x_norm_sq + c_norm_sq - cross_term
+
+        # Numerical stability: clamp small negative values to zero (floating point errors)
+        np.maximum(dists_sq, 0.0, out=dists_sq)
+
+        return dists_sq
 
     # ------------------------------------------------------------------
 

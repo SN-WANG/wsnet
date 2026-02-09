@@ -73,8 +73,8 @@ class PRS:
         for d in range(input_dim):
             exp_d = self.powers[:, d]
             mask = exp_d > 0
-            if not np.any(mask): continue
-
+            if not np.any(mask):
+                continue
             phi[:, mask] *= (x[:, d:d+1] ** exp_d[mask])
 
         return phi
