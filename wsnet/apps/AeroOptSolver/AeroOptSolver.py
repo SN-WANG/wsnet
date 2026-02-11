@@ -5,7 +5,6 @@ import os
 import sys
 import numpy as np
 from scipy.optimize import differential_evolution
-from sklearn.metrics import mean_squared_error, r2_score
 
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -145,11 +144,12 @@ def evaluate_metrics(y_true: np.ndarray, y_pred: np.ndarray, label: str):
         y_pred (np.ndarray): predictions. shape: (n, out).
         label (str): model identifier label.
     """
-    # handle potential nans from abaqus failures if necessary, 
-    # but strictly assuming clean data for metrics calculation here.
-    r2 = r2_score(y_true, y_pred)
-    mse = mean_squared_error(y_true, y_pred)
+    mse = np.mean((y_pred - y_true) ** 2)
     rmse = np.sqrt(mse)
+
+    ss_res = np.sum((y_pred - y_true) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true, axis=0, keepdims=True)) ** 2)
+    r2 = 1.0 - ss_res / (ss_tot + 1e-12)
 
     logger.info(f"--- {label} Performance ---")
     logger.info(f"R2  : {sl.m}{r2:.6f}{sl.q}")
@@ -231,7 +231,7 @@ if __name__ == "__main__":
     model_tahs = TAHS()
     model_tahs.fit(x_train, y_train)
 
-    y_pred_tahs, _ = model_tahs.predict(x_test, y_test)
+    y_pred_tahs = model_tahs.predict(x_test)
     evaluate_metrics(y_test, y_pred_tahs, "T-AHS")
 
     # ------------------------------------------------------------------
@@ -242,7 +242,7 @@ if __name__ == "__main__":
     model_mmfs = MMFS()
     model_mmfs.fit(x_lf, y_lf, x_hf, y_hf)
 
-    y_pred_mmfs, _ = model_mmfs.predict(x_test, y_test)
+    y_pred_mmfs = model_mmfs.predict(x_test)
     evaluate_metrics(y_test, y_pred_mmfs, "MMFS")
 
     # ------------------------------------------------------------------
@@ -260,10 +260,10 @@ if __name__ == "__main__":
 
     # infill loop
     for i in range(num_infill):
-        logger.info(f"infill iteration {i + 1}/{num_infill}")
-
         # instantiate infill strategy (ei: expected improvement)
-        strategy = Infill(model=model_krg, bounds=bounds, y_train=y_current, criterion="ei", target_index=target_index)
+        strategy = Infill(
+            model=model_krg, bounds=bounds, y_train=y_current, criterion="ei", target_index=target_index
+        )
 
         # propose new candidate
         x_new = strategy.propose() # shape (1, num_features)
@@ -286,7 +286,7 @@ if __name__ == "__main__":
         model_krg.fit(x_current, y_current)
 
     # final prediction after active learning
-    y_pred_krg, _, _ = model_krg.predict(x_test, y_test)
+    y_pred_krg, _ = model_krg.predict(x_test)
     evaluate_metrics(y_test, y_pred_krg, "KRG + Infill")
 
     # ------------------------------------------------------------------

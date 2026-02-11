@@ -92,12 +92,15 @@ class KRG:
         F = [1]
 
         Args:
-            x (np.ndarray): Input feature data (num_samples, input_dim)
+            x (np.ndarray): Input feature data.
+                Shape: (num_samples, input_dim), dtype: float64.
 
         Returns:
             Tuple[np.ndarray, np.ndarray]:
-                F (np.ndarray): Regression matrix (num_samples, 1)
-                dF (np.ndarray): Jacobian of F at the first point (input_dim, 1)
+                F (np.ndarray): Regression matrix.
+                    Shape: (num_samples, 1), dtype: float64.
+                dF (np.ndarray): Jacobian of F at the first point.
+                    Shape: (input_dim, 1), dtype: float64.
         """
         num_samples, input_dim = x.shape
         F = np.ones((num_samples, 1))
@@ -111,12 +114,15 @@ class KRG:
         F = [1, x_1, ..., x_n]
 
         Args:
-            x (np.ndarray): Input feature data (num_samples, input_dim)
+            x (np.ndarray): Input feature data.
+                Shape: (num_samples, input_dim), dtype: float64.
 
         Returns:
             Tuple[np.ndarray, np.ndarray]:
-                F (np.ndarray): Regression matrix (num_samples, input_dim + 1)
-                dF (np.ndarray): Jacobian of F at the first point (input_dim, input_dim + 1)
+                F (np.ndarray): Regression matrix.
+                    Shape: (num_samples, input_dim + 1), dtype: float64.
+                dF (np.ndarray): Jacobian of F at the first point.
+                    Shape: (input_dim, input_dim + 1), dtype: float64.
         """
 
         num_samples, input_dim = x.shape
@@ -131,12 +137,15 @@ class KRG:
         F = [1, x_i, x_i^2, x_i*x_j]
 
         Args:
-            x (np.ndarray): Input feature data (num_samples, input_dim)
+            x (np.ndarray): Input feature data.
+                Shape: (num_samples, input_dim), dtype: float64.
 
         Returns:
             Tuple[np.ndarray, np.ndarray]:
-                F (np.ndarray): Regression matrix (num_samples, num_terms)
-                dF (np.ndarray): Jacobian of F at the first point (input_dim, num_terms)
+                F (np.ndarray): Regression matrix.
+                    Shape: (num_samples, num_terms), dtype: float64.
+                dF (np.ndarray): Jacobian of F at the first point.
+                    Shape: (input_dim, num_terms), dtype: float64.
         """
 
         num_samples, input_dim = x.shape
@@ -196,13 +205,17 @@ class KRG:
         r_i = prod_{j=1}^{n} exp(-theta_j * |d_{ij}|)
 
         Args:
-            theta (np.ndarray): Correlation parameters (length-scales)
-            d (np.ndarray): Differences between input sites (m, n)
+            theta (np.ndarray): Correlation parameters (length-scales).
+                Shape: (input_dim,) or (1,), dtype: float64.
+            d (np.ndarray): Differences between input sites.
+                Shape: (num_diffs, input_dim), dtype: float64.
 
         Returns:
             Tuple[np.ndarray, Optional[np.ndarray]]:
-                r (np.ndarray): Correlation vector (m, 1)
-                dr (np.ndarray): Jacobian matrix (m, n)
+                r (np.ndarray): Correlation vector.
+                    Shape: (num_diffs, 1), dtype: float64.
+                dr (np.ndarray): Jacobian matrix.
+                    Shape: (num_diffs, input_dim), dtype: float64.
         """
 
         d = np.atleast_2d(d)
@@ -238,13 +251,17 @@ class KRG:
             The last element of theta is the exponent (power)
 
         Args:
-            theta (np.ndarray): Correlation parameters. Length n+1 or 2
-            d (np.ndarray): Differences between input sites (m, n)
+            theta (np.ndarray): Correlation parameters. Length n+1 or 2.
+                Shape: (input_dim + 1,) or (2,), dtype: float64.
+            d (np.ndarray): Differences between input sites.
+                Shape: (num_diffs, input_dim), dtype: float64.
 
         Returns:
             Tuple[np.ndarray, Optional[np.ndarray]]:
-                r (np.ndarray): Correlation vector (m, 1)
-                dr (np.ndarray): Jacobian matrix (m, n)
+                r (np.ndarray): Correlation vector.
+                    Shape: (num_diffs, 1), dtype: float64.
+                dr (np.ndarray): Jacobian matrix.
+                    Shape: (num_diffs, input_dim), dtype: float64.
         """
 
         d = np.atleast_2d(d)
@@ -281,13 +298,17 @@ class KRG:
         r_i = prod_{j=1}^{n} exp(-theta_j * d_{ij}^2)
 
         Args:
-            theta (np.ndarray): Correlation parameters (length-scales)
-            d (np.ndarray): Differences between input sites (m, n)
+            theta (np.ndarray): Correlation parameters (length-scales).
+                Shape: (input_dim,) or (1,), dtype: float64.
+            d (np.ndarray): Differences between input sites.
+                Shape: (num_diffs, input_dim), dtype: float64.
 
         Returns:
             Tuple[np.ndarray, Optional[np.ndarray]]:
-                r (np.ndarray): Correlation vector (m, 1)
-                dr (np.ndarray): Jacobian matrix (m, n)
+                r (np.ndarray): Correlation vector.
+                    Shape: (num_diffs, 1), dtype: float64.
+                dr (np.ndarray): Jacobian matrix.
+                    Shape: (num_diffs, input_dim), dtype: float64.
         """
 
         d = np.atleast_2d(d)
@@ -320,13 +341,17 @@ class KRG:
         r_i = prod_{j=1}^{n} max(0, 1 - theta_j * |d_{ij}|)
 
         Args:
-            theta (np.ndarray): Correlation parameters
-            d (np.ndarray): Differences between input sites (m, n)
+            theta (np.ndarray): Correlation parameters.
+                Shape: (input_dim,) or (1,), dtype: float64.
+            d (np.ndarray): Differences between input sites.
+                Shape: (num_diffs, input_dim), dtype: float64.
 
         Returns:
             Tuple[np.ndarray, Optional[np.ndarray]]:
-                r (np.ndarray): Correlation vector (m, 1)
-                dr (np.ndarray): Jacobian matrix (m, n)
+                r (np.ndarray): Correlation vector.
+                    Shape: (num_diffs, 1), dtype: float64.
+                dr (np.ndarray): Jacobian matrix.
+                    Shape: (num_diffs, input_dim), dtype: float64.
         """
 
         d = np.atleast_2d(d)
@@ -371,13 +396,17 @@ class KRG:
         r_i = prod_{j=1}^{n} max(0, 1 - 1.5 * (theta_j * d_{ij}) + 0.5 * (theta_j * d_{ij})^3)
 
         Args:
-            theta (np.ndarray): Correlation parameters
-            d (np.ndarray): Differences between input sites (m, n)
+            theta (np.ndarray): Correlation parameters.
+                Shape: (input_dim,) or (1,), dtype: float64.
+            d (np.ndarray): Differences between input sites.
+                Shape: (num_diffs, input_dim), dtype: float64.
 
         Returns:
             Tuple[np.ndarray, Optional[np.ndarray]]:
-                r (np.ndarray): Correlation vector (m, 1)
-                dr (np.ndarray): Jacobian matrix (m, n)
+                r (np.ndarray): Correlation vector.
+                    Shape: (num_diffs, 1), dtype: float64.
+                dr (np.ndarray): Jacobian matrix.
+                    Shape: (num_diffs, input_dim), dtype: float64.
         """
 
         d = np.atleast_2d(d)
@@ -421,13 +450,17 @@ class KRG:
         r_i = prod_{j=1}^{n} max(0, 1 - 3 * (theta_j * d_{ij})^2 + 2 * (theta_j * d_{ij})^3)
 
         Args:
-            theta (np.ndarray): Correlation parameters
-            d (np.ndarray): Differences between input sites (m, n)
+            theta (np.ndarray): Correlation parameters.
+                Shape: (input_dim,) or (1,), dtype: float64.
+            d (np.ndarray): Differences between input sites.
+                Shape: (num_diffs, input_dim), dtype: float64.
 
         Returns:
             Tuple[np.ndarray, Optional[np.ndarray]]:
-                r (np.ndarray): Correlation vector (m, 1)
-                dr (np.ndarray): Jacobian matrix (m, n)
+                r (np.ndarray): Correlation vector.
+                    Shape: (num_diffs, 1), dtype: float64.
+                dr (np.ndarray): Jacobian matrix.
+                    Shape: (num_diffs, input_dim), dtype: float64.
         """
 
         d = np.atleast_2d(d)
@@ -475,13 +508,17 @@ class KRG:
         where x = theta_j * |d_{ij}|
 
         Args:
-            theta (np.ndarray): Correlation parameters
-            d (np.ndarray): Differences between input sites (m, n)
+            theta (np.ndarray): Correlation parameters.
+                Shape: (input_dim,) or (1,), dtype: float64.
+            d (np.ndarray): Differences between input sites.
+                Shape: (num_diffs, input_dim), dtype: float64.
 
         Returns:
             Tuple[np.ndarray, Optional[np.ndarray]]:
-                r (np.ndarray): Correlation vector (m, 1)
-                dr (np.ndarray): Jacobian matrix (m, n)
+                r (np.ndarray): Correlation vector.
+                    Shape: (num_diffs, 1), dtype: float64.
+                dr (np.ndarray): Jacobian matrix.
+                    Shape: (num_diffs, input_dim), dtype: float64.
         """
 
         d = np.atleast_2d(d)
@@ -543,10 +580,10 @@ class KRG:
         Performs Generalized Least Squares (GLS) estimation.
 
         Args:
-            x (np.ndarray): Scaled inputs. Shape: (num_samples, input_dim).
-            y (np.ndarray): Scaled targets. Shape: (num_samples, target_dim).
-            theta (np.ndarray): Correlation parameters.
-            D (np.ndarray): Distance matrix.
+            x (np.ndarray): Scaled inputs of shape: (num_samples, input_dim), dtype: float64.
+            y (np.ndarray): Scaled targets of shape: (num_samples, target_dim), dtype: float64.
+            theta (np.ndarray): Correlation parameters of shape: (input_dim,), dtype: float64.
+            D (np.ndarray): Distance matrix of shape: (num_diffs, input_dim), dtype: float64.
 
         Returns:
             Dict[str, Any]: A dictionary containing decomposition matrices and estimates.
@@ -632,13 +669,17 @@ class KRG:
         log L_c_neg(theta) = (m/2) * log(sigma2_hat) + log(det(R))/2
 
         Args:
-            theta (np.ndarray): Correlation parameters to be optimized
-            x (np.ndarray): Scaled inputs (design sites)
-            y (np.ndarray): Scaled targets
-            D (np.ndarray): Unique difference matrix between design sites
+            theta (np.ndarray): Correlation parameters to be optimized.
+                Shape: (input_dim,), dtype: float64.
+            x (np.ndarray): Scaled inputs (design sites).
+                Shape: (num_samples, input_dim), dtype: float64.
+            y (np.ndarray): Scaled targets.
+                Shape: (num_samples, target_dim), dtype: float64.
+            D (np.ndarray): Unique difference matrix between design sites.
+                Shape: (num_diffs, input_dim), dtype: float64.
 
         Returns:
-            float: The negative concentrated log-likelihood for minimization
+            float: The negative concentrated log-likelihood for minimization.
         """
 
         num_samples = x.shape[0]
@@ -666,17 +707,12 @@ class KRG:
 
     def fit(self, x_train: np.ndarray, y_train: np.ndarray) -> None:
         """
-        Performs model training.
+        Perform model training.
 
         Args:
-            x_train (np.ndarray): Training inputs. Shape: (num_samples, input_dim).
-            y_train (np.ndarray): Training targets. Shape: (num_samples, target_dim).
+            x_train (np.ndarray): Training inputs of shape: (num_samples, input_dim), dtype: float64.
+            y_train (np.ndarray): Training targets of shape: (num_samples, target_dim), dtype: float64.
         """
-        if x_train.ndim == 1:
-            x_train = x_train[:, None]
-        if y_train.ndim == 1:
-            y_train = y_train[:, None]
-
         num_samples, input_dim = x_train.shape
 
         # 1. Preprocessing: scale train inputs and targets
@@ -735,18 +771,15 @@ class KRG:
     def predict(self, x_pred: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
 
-        Performs model prediction.
+        Perform model prediction.
 
         Args:
-            x_pred (np.ndarray): Prediction inputs. Shape: (num_samples, input_dim)
+            x_pred (np.ndarray): Prediction inputs of shape: (num_samples, input_dim), dtype: float64.
 
         Returns:
-            y_pred (np.ndarray): Prediction targets. Shape: (num_samples, target_dim)
-            mse_pred (np.ndarray): Prediction mse values. Shape: (num_samples, target_dim)
+            y_pred (np.ndarray): Prediction targets of shape: (num_samples, target_dim), dtype: float64.
+            mse_pred (np.ndarray): Prediction mse values of shape: (num_samples, target_dim), dtype: float64.
         """
-        if x_pred.ndim == 1:
-            x_pred = x_pred[:, None]
-
         # 1. Preprocessing: scale pred inputs
         if self.beta is None:
             raise RuntimeError("Model has not been fitted.")
@@ -842,10 +875,5 @@ class KRG:
         # 3. Unscale predictions (both mean and variance)
         y_pred = self.scaler_y.inverse_transform(y_pred_scaled)
         var_pred = var_pred_scaled * (self.scaler_y.std ** 2)
-
-        if y_pred.shape[1] == 1:
-            y_pred = y_pred.ravel()
-        if var_pred.shape[1] == 1:
-            var_pred = var_pred.ravel()
 
         return y_pred, var_pred

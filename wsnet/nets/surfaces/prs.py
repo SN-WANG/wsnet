@@ -41,7 +41,7 @@ class PRS:
             input_dim (int): Dimension of input.
 
         Returns:
-            np.ndarray: Exponent matrix. Shape: (num_terms, input_dim)
+            np.ndarray: Exponent matrix. Shape: (num_terms, input_dim), dtype: int64.
         """
         powers = []
         for d in range(self.degree + 1):
@@ -60,10 +60,10 @@ class PRS:
         Constructs polynomial feature matrix.
 
         Args:
-            x (np.ndarray): Inputs. Shape: (num_samples, input_dim)
+            x (np.ndarray): Inputs. Shape: (num_samples, input_dim), dtype: float64.
 
         Returns:
-            np.ndarray: Feature matrix. Shape: (num_samples, num_terms)
+            np.ndarray: Feature matrix. Shape: (num_samples, num_terms), dtype: float64.
         """
         num_samples, input_dim = x.shape
         num_terms = self.powers.shape[0]
@@ -83,17 +83,12 @@ class PRS:
 
     def fit(self, x_train: np.ndarray, y_train: np.ndarray) -> None:
         """
-        Performs model training.
+        Perform model training.
 
         Args:
-            x_train (np.ndarray): Training inputs. Shape: (num_samples, input_dim)
-            y_train (np.ndarray): Training targets. Shape: (num_samples, target_dim)
+            x_train (np.ndarray): Training inputs of shape: (num_samples, input_dim), dtype: float64.
+            y_train (np.ndarray): Training targets of shape: (num_samples, target_dim), dtype: float64.
         """
-        if x_train.ndim == 1:
-            x_train = x_train[:, None]
-        if y_train.ndim == 1:
-            y_train = y_train[:, None]
-
         x_scaled = self.scaler_x.fit(x_train, channel_dim=1).transform(x_train)
         y_scaled = self.scaler_y.fit(y_train, channel_dim=1).transform(y_train)
 
@@ -113,27 +108,21 @@ class PRS:
 
     def predict(self, x_pred: np.ndarray) -> np.ndarray:
         """
-        Performs model prediction.
+        Perform model prediction.
 
         Args:
-            x_pred (np.ndarray): Prediction inputs. Shape: (num_samples, input_dim)
+            x_pred (np.ndarray): Prediction inputs of shape: (num_samples, input_dim), dtype: float64.
 
         Returns:
-            np.ndarray: Prediction targets. Shape: (num_samples, target_dim)
+            np.ndarray: Prediction targets of shape: (num_samples, target_dim), dtype: float64.
         """
         if self.weights is None or self.powers is None:
             raise RuntimeError("Model has not been fitted.")
-
-        if x_pred.ndim == 1:
-            x_pred = x_pred[:, None]
 
         x_scaled = self.scaler_x.transform(x_pred)
         phi = self._build_features(x_scaled)
 
         y_scaled = phi @ self.weights
         y_pred = self.scaler_y.inverse_transform(y_scaled)
-
-        if y_pred.shape[1] == 1:
-            y_pred = y_pred.ravel()
 
         return y_pred

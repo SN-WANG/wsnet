@@ -47,11 +47,11 @@ class SVR:
         Constructs SVR feature matrix.
 
         Args:
-            x1 (np.ndarray): Shape (num_samples_1, input_dim)
-            x2 (np.ndarray): Shape (num_samples_2, input_dim)
+            x1 (np.ndarray): Shape (num_samples_1, input_dim), dtype: float64.
+            x2 (np.ndarray): Shape (num_samples_2, input_dim), dtype: float64.
 
         Returns:
-            np.ndarray: Feature matrix. Shape: (num_samples_1, num_samples_2)
+            np.ndarray: Feature matrix. Shape: (num_samples_1, num_samples_2), dtype: float64.
         """
         if self.kernel == "linear":
             return x1 @ x2.T
@@ -73,11 +73,13 @@ class SVR:
         Note: beta = alpha - alpha*
 
         Args:
-            phi (np.ndarray): Feature matrix (num_samples, num_samples).
-            y (np.ndarray): Target vector (num_samples,).
+            phi (np.ndarray): Feature matrix of shape (num_samples, num_samples), dtype: float64.
+            y (np.ndarray): Target vector of shape (num_samples,), dtype: float64.
 
         Returns:
             Tuple[np.ndarray, float]: Dual coefficients (beta) and intercept (bias).
+                beta shape: (num_samples,), dtype: float64.
+                bias dtype: float.
         """
         num_samples = y.shape[0]
 
@@ -150,17 +152,12 @@ class SVR:
 
     def fit(self, x_train: np.ndarray, y_train: np.ndarray) -> None:
         """
-        Performs model training.
+        Perform model training.
 
         Args:
-            x_train (np.ndarray): Training inputs. Shape: (num_samples, input_dim).
-            y_train (np.ndarray): Training targets. Shape: (num_samples, target_dim).
+            x_train (np.ndarray): Training inputs of shape: (num_samples, input_dim), dtype: float64.
+            y_train (np.ndarray): Training targets of shape: (num_samples, target_dim), dtype: float64.
         """
-        if x_train.ndim == 1:
-            x_train = x_train[:, None]
-        if y_train.ndim == 1:
-            y_train = y_train[:, None]
-
         x_scaled = self.scaler_x.fit(x_train, channel_dim=1).transform(x_train)
         y_scaled = self.scaler_y.fit(y_train, channel_dim=1).transform(y_train)
 
@@ -188,27 +185,21 @@ class SVR:
 
     def predict(self, x_pred: np.ndarray) -> np.ndarray:
         """
-        Performs model prediction.
+        Perform model prediction.
 
         Args:
-            x_pred (np.ndarray): Prediction inputs. Shape: (num_samples, input_dim).
+            x_pred (np.ndarray): Prediction inputs of shape: (num_samples, input_dim), dtype: float64.
 
         Returns:
-            np.ndarray: Prediction targets. Shape: (num_samples, target_dim).
+            np.ndarray: Prediction targets of shape: (num_samples, target_dim), dtype: float64.
         """
         if not self.fitted:
             raise RuntimeError("Model has not been fitted.")
-
-        if x_pred.ndim == 1:
-            x_pred = x_pred[:, None]
 
         x_scaled = self.scaler_x.transform(x_pred)
         phi = self._build_features(x_scaled, self.support_vectors_)
 
         y_scaled = phi @ self.dual_coef_ + self.intercept_
         y_pred = self.scaler_y.inverse_transform(y_scaled)
-
-        if y_pred.shape[1] == 1:
-            y_pred = y_pred.ravel()
 
         return y_pred

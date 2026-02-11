@@ -3,23 +3,13 @@
 # Paper author: Yin Liu, Shuo Wang, Qi Zhou, Liye Lv, Wei Sun, Xueguan Song
 # Code author: Shengning Wang
 
-import os
-import sys
 import numpy as np
-from scipy.spatial.distance import cdist
-from scipy.optimize import minimize_scalar
 from scipy.linalg import pinv
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import r2_score, mean_squared_error
-from typing import Dict, Tuple, Union, Optional, List
-
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+from scipy.optimize import minimize_scalar
+from typing import Dict, Tuple, Optional, List
 
 from wsnet.nets.surfaces.rbf import RBF
-from wsnet.utils.engine import sl, logger
+from wsnet.utils.scaler import StandardScalerNP
 
 
 class MMFS:
@@ -37,325 +27,291 @@ class MMFS:
     - Generalized Inverse (Minimum Norm Solution) for solving model coefficients.
 
     Attributes:
-    - lf_model (RBF): The Low-Fidelity surrogate model instance.
-    - sigma_bounds (Tuple[float, float]): Search bounds for the RBF shape parameter sigma.
-    - scaler_x (StandardScaler): Preprocessor for HF features.
-    - scaler_y (StandardScaler): Preprocessor for HF targets.
-    - x_hf_train_ (np.ndarray): Scaled HF training inputs (num_hf, num_features).
-    - y_hf_train_ (np.ndarray): Scaled HF training targets (num_hf, num_outputs).
-    - beta_ (List[np.ndarray]): List of coefficient vectors [beta_1, ..., beta_m] for each output dimension.
-    - sigma_ (float): Optimized shape parameter for the HF correction RBF.
-    - is_fitted (bool): Status flag.
+        lf_model (RBF): The Low-Fidelity surrogate model instance.
+        sigma_bounds (Tuple[float, float]): Search bounds for the RBF shape parameter sigma.
+        scaler_x (StandardScalerNP): Preprocessor for HF inputs.
+        scaler_y (StandardScalerNP): Preprocessor for HF targets.
+        x_hf_train_ (np.ndarray): Scaled HF training inputs.
+            Shape: (num_hf_samples, input_dim), dtype: float64.
+        y_hf_train_ (np.ndarray): Scaled HF training targets.
+            Shape: (num_hf_samples, target_dim), dtype: float64.
+        beta_ (List[np.ndarray]): List of coefficient vectors [beta_1, ..., beta_m] for each target dimension.
+            Each beta has shape (2 * num_hf_samples, 1).
+        sigma_ (float): Optimized shape parameter for the HF correction RBF.
+        is_fitted (bool): Status flag indicating if the model has been trained.
     """
 
-    def __init__(self, lf_model_params: Optional[Dict] = None, sigma_bounds: Tuple[float, float] = (0.01, 10.0)):
+    def __init__(
+            self, lf_model_params: Optional[Dict] = None, sigma_bounds: Tuple[float, float] = (0.01, 10.0)
+    ) -> None:
         """
-        Initializes the MMFS model configuration.
+        Initialize the MMFS model configuration.
 
         Args:
-        - lf_model_params (Optional[Dict]): Dictionary of kwargs to pass to the base RBF class for the LF model.
-        - sigma_bounds (Tuple[float, float]): The lower and upper bounds for optimizing the shape parameter sigma.
+            lf_model_params (Optional[Dict]): Dictionary of kwargs to pass to the base RBF class
+                for the LF model. If None, default RBF parameters are used.
+            sigma_bounds (Tuple[float, float]): The lower and upper bounds for optimizing
+                the shape parameter sigma.
         """
-        # Initialize the LF RBF model
-        params = lf_model_params if lf_model_params is not None else {'num_centers': 50, 'gamma': 0.1, 'alpha': 0.0}
+        # parameters
+        params = lf_model_params if lf_model_params is not None else {}
         self.lf_model = RBF(**params)
 
         self.sigma_bounds = sigma_bounds
 
-        # Scalers for normalization of HF data
-        self.scaler_x = StandardScaler()
-        self.scaler_y = StandardScaler()
+        # scalers
+        self.scaler_x = StandardScalerNP()
+        self.scaler_y = StandardScalerNP()
 
-        # Model state
+        # model state
         self.x_hf_train_: Optional[np.ndarray] = None
         self.y_hf_train_: Optional[np.ndarray] = None
-        self.beta_: List[np.ndarray] = []  # Stores beta per output dim
+        self.beta_: List[np.ndarray] = []
         self.sigma_: float = 1.0
         self.is_fitted: bool = False
 
-    def _multiquadric_kernel(self, dists: np.ndarray, sigma: float) -> np.ndarray:
+    # ------------------------------------------------------------------
+
+    def _compute_dists(self, x: np.ndarray, c: np.ndarray) -> np.ndarray:
         """
-        Computes the Multiquadric (MQ) basis function: phi(r) = sqrt(r^2 + sigma^2).
+        Compute pairwise squared Euclidean distances between two point sets.
+
+        Uses the algebraic expansion: ||x - c||^2 = ||x||^2 + ||c||^2 - 2 * x @ c^T
+        for vectorized computation without explicit loops.
 
         Args:
-        - dists (np.ndarray): Euclidean distance matrix (N, M).
-        - sigma (float): Shape parameter.
+            x (np.ndarray): Query points of shape (num_queries, num_features), dtype: float64.
+            c (np.ndarray): Reference points of shape (num_refs, num_features), dtype: float64.
 
         Returns:
-        - np.ndarray: Kernel matrix (N, M).
+            np.ndarray: Squared distance matrix of shape (num_queries, num_refs), dtype: float64.
+                Entry (i, j) contains the squared Euclidean distance between x[i] and c[j].
         """
-        return np.sqrt(dists**2 + sigma**2)
+        # Compute squared L2 norms for each point set: (num_queries, 1) and (num_refs,)
+        x_norm_sq = np.sum(x ** 2, axis=1, keepdims=True)  # Shape: (num_queries, 1)
+        c_norm_sq = np.sum(c ** 2, axis=1)                 # Shape: (num_refs,)
+
+        # Compute cross term: 2 * x @ c^T, shape: (num_queries, num_refs)
+        cross_term = 2.0 * (x @ c.T)
+
+        # Combine: ||x||^2 + ||c||^2 - 2 * x @ c^T
+        # Broadcasting: (num_queries, 1) + (num_refs,) -> (num_queries, num_refs)
+        dists_sq = x_norm_sq + c_norm_sq - cross_term
+
+        # Numerical stability: clamp small negative values to zero (floating point errors)
+        np.maximum(dists_sq, 0.0, out=dists_sq)
+
+        return dists_sq
+
+    # ------------------------------------------------------------------
+
+    def _multiquadric_kernel(self, dists_sq: np.ndarray, sigma: float) -> np.ndarray:
+        """
+        Compute the Multiquadric (MQ) basis function: phi(r) = sqrt(r^2 + sigma^2).
+
+        Args:
+            dists_sq (np.ndarray): Squared Euclidean distance matrix of shape (n, m), dtype: float64.
+            sigma (float): Shape parameter (bandwidth).
+
+        Returns:
+            np.ndarray: Kernel matrix of shape (n, m), dtype: float64.
+        """
+        return np.sqrt(dists_sq + sigma ** 2)
+
+    # ------------------------------------------------------------------
 
     def _construct_expansion_matrix(self, phi: np.ndarray, y_lf: np.ndarray) -> np.ndarray:
         """
-        Constructs the expansion matrix H.
-        H = [diag(y_lf) * phi, phi]
+        Construct the expansion matrix H = [diag(y_lf) * phi, phi].
+
+        This matrix combines the adaptive scaling (first block) and shifting (second block)
+        operations for the multi-fidelity correction.
 
         Args:
-        - phi (np.ndarray): RBF correlation matrix (num_samples, num_centers).
-        - y_lf (np.ndarray): Low-fidelity predictions corresponding to samples (num_samples, 1).
+            phi (np.ndarray): RBF kernel matrix of shape (num_samples, num_centers), dtype: float64.
+            y_lf (np.ndarray): Low-fidelity predictions of shape (num_samples, 1), dtype: float64.
 
         Returns:
-        - np.ndarray: Expansion matrix H with shape (num_samples, 2 * num_centers).
+            np.ndarray: Expansion matrix H of shape (num_samples, 2 * num_centers), dtype: float64.
         """
-        # Element-wise multiplication of column vector y_lf with matrix phi behaves like diag(y_lf) @ phi
-        # y_lf shape: (N, 1), phi shape: (N, N_c) -> result: (N, N_c)
+        # Element-wise multiplication of y_lf with each column of phi (equivalent to diag(y_lf) @ phi)
         scaled_phi = y_lf * phi
         return np.concatenate([scaled_phi, phi], axis=1)
 
+    # ------------------------------------------------------------------
+
     def _loocv_error(self, sigma: float, dist_matrix: np.ndarray, y_lf_at_hf: np.ndarray, y_hf: np.ndarray) -> float:
         """
-        Calculates the Leave-One-Out Cross-Validation (LOOCV) error for a specific sigma.
-        Iterates through all outputs to calculate a summed error.
+        Calculate the Leave-One-Out Cross-Validation (LOOCV) error for a specific sigma.
+
+        Iterates through all samples and output dimensions to compute the total MSE.
 
         Args:
-        - sigma (float): The candidate shape parameter.
-        - dist_matrix (np.ndarray): Pre-computed distance matrix of HF samples (num_hf, num_hf).
-        - y_lf_at_hf (np.ndarray): Scaled LF predictions at HF sites (num_hf, num_outputs).
-        - y_hf (np.ndarray): Scaled HF targets (num_hf, num_outputs).
+            sigma (float): The candidate shape parameter.
+            dist_matrix (np.ndarray): Pre-computed squared distance matrix of HF samples
+                of shape (num_hf, num_hf), dtype: float64.
+            y_lf_at_hf (np.ndarray): Scaled LF predictions at HF sites
+                of shape (num_hf, target_dim), dtype: float64.
+            y_hf (np.ndarray): Scaled HF targets of shape (num_hf, target_dim), dtype: float64.
 
         Returns:
-        - float: The total Mean Squared Error across all LOO folds and outputs.
+            float: The total Mean Squared Error across all LOO folds and outputs.
         """
-        num_hf, num_outputs = y_hf.shape
-        total_error = 0.0
+        num_hf, target_dim = y_hf.shape
 
         # Avoid singularity
-        if sigma < 1e-6: return 1e10
+        if sigma < 1e-6:
+            return 1e10
 
         # Compute full kernel matrix for this sigma
         phi_full = self._multiquadric_kernel(dist_matrix, sigma)
 
-        # LOOCV Loop
+        total_error = 0.0
+
+        # LOOCV loop
         for i in range(num_hf):
-            # 1. Split indices
+            # Split indices: leave one out
             train_idx = np.delete(np.arange(num_hf), i)
-            test_idx = np.array([i])
+            test_idx = i
 
-            # 2. Extract sub-matrices
-            # Training phi: submatrix of shape (num_hf - 1, num_hf - 1)
-            phi_train = phi_full[np.ix_(train_idx, train_idx)]
+            # Extract sub-matrices
+            phi_train = phi_full[np.ix_(train_idx, train_idx)]  # Shape: (num_hf - 1, num_hf - 1)
+            phi_test = phi_full[np.ix_([test_idx], train_idx)]  # Shape: (1, num_hf - 1)
 
-            # Testing phi: distance from test point to training points (1, num_hf - 1)
-            phi_test = phi_full[np.ix_(test_idx, train_idx)]
+            # Solve for each output dimension
+            for m in range(target_dim):
+                y_c_train = y_lf_at_hf[train_idx, m:m + 1]
+                y_e_train = y_hf[train_idx, m:m + 1]
 
-            # 3. Solve for each output dimension
-            for m in range(num_outputs):
-                y_c_train = y_lf_at_hf[train_idx, m:m+1]
-                y_e_train = y_hf[train_idx, m:m+1]
-
-                # Construct H matrix (Eq 8) for training set
+                # Construct H matrix for training set
                 H_train = self._construct_expansion_matrix(phi_train, y_c_train)
 
-                # Solve beta using Generalized Inverse (Eq 9)
-                # beta = H.T * (H * H.T)^-1 * Y
-                # This corresponds to the minimum norm solution for under-determined systems
-                # Or standard least squares for over-determined.
-                # Here H is (N-1, 2*(N-1)), so it is 'fat' (under-determined).
-                # We use pinv which handles this automatically.
+                # Solve beta using generalized inverse (minimum norm solution)
                 try:
                     beta = pinv(H_train) @ y_e_train
                 except np.linalg.LinAlgError:
                     total_error += 1e10
                     continue
 
-                # 4. Predict validation point
-                y_c_test = y_lf_at_hf[test_idx, m:m+1]
+                # Predict validation point
+                y_c_test = y_lf_at_hf[test_idx, m:m + 1]
                 H_test = self._construct_expansion_matrix(phi_test, y_c_test)
 
                 y_pred = H_test @ beta
-                y_true = y_hf[test_idx, m:m+1]
+                y_true = y_hf[test_idx, m:m + 1]
 
                 total_error += np.sum((y_pred - y_true) ** 2)
 
         return total_error / num_hf
 
+    # ------------------------------------------------------------------
+
     def fit(self, x_lf: np.ndarray, y_lf: np.ndarray, x_hf: np.ndarray, y_hf: np.ndarray) -> None:
         """
-        Trains the MMFS model using both Low-Fidelity and High-Fidelity datasets.
+        Perform model training.
 
-        Process:
-        1. Train LF model (RBF).
-        2. Optimize shape parameter (sigma) via LOOCV on HF data.
-        3. Solve for adaptive scale coefficients (beta) using the full HF dataset.
+        The training process involves:
+        1. Training the LF surrogate model on raw LF data.
+        2. Normalizing HF inputs and targets using StandardScalerNP.
+        3. Optimizing the shape parameter sigma via LOOCV on HF data.
+        4. Solving for adaptive scale coefficients (beta) using the full HF dataset.
 
         Args:
-        - x_lf (np.ndarray): Low-Fidelity inputs (num_lf, num_features).
-        - y_lf (np.ndarray): Low-Fidelity targets (num_lf, num_outputs).
-        - x_hf (np.ndarray): High-Fidelity inputs (num_hf, num_features).
-        - y_hf (np.ndarray): High-Fidelity targets (num_hf, num_outputs).
+            x_lf (np.ndarray): Low-fidelity inputs of shape (num_lf_samples, input_dim).
+            y_lf (np.ndarray): Low-fidelity targets of shape (num_lf_samples, target_dim).
+            x_hf (np.ndarray): High-fidelity inputs of shape (num_hf_samples, input_dim).
+            y_hf (np.ndarray): High-fidelity targets of shape (num_hf_samples, target_dim).
         """
-        # ensure 2D arrays
-        if x_lf.ndim == 1: x_lf = x_lf.reshape(-1, 1)
-        if y_lf.ndim == 1: y_lf = y_lf.reshape(-1, 1)
-        if x_hf.ndim == 1: x_hf = x_hf.reshape(-1, 1)
-        if y_hf.ndim == 1: y_hf = y_hf.reshape(-1, 1)
-
-        logger.info(f"training MMFS (LF=RBF, SigmaBounds={self.sigma_bounds})...")
-
-        # 1. fit LF model
+        # Step 1: Train LF model
         self.lf_model.fit(x_lf, y_lf)
 
-        # 2. scale HF data
-        self.x_hf_train_ = self.scaler_x.fit_transform(x_hf)
-        self.y_hf_train_ = self.scaler_y.fit_transform(y_hf)
+        # Step 2: Scale HF data
+        self.x_hf_train_ = self.scaler_x.fit(x_hf, channel_dim=1).transform(x_hf)
+        self.y_hf_train_ = self.scaler_y.fit(y_hf, channel_dim=1).transform(y_hf)
 
-        # 3. get LF predictions at HF points (Y_c)
-        y_lf_at_hf_raw = self.lf_model.predict(x_hf)
-        if isinstance(y_lf_at_hf_raw, tuple):
-            y_lf_at_hf_raw = y_lf_at_hf_raw[0]
-        y_lf_at_hf_scaled = self.scaler_y.transform(y_lf_at_hf_raw)
+        # Step 3: Get LF predictions at HF points
+        y_lf_at_hf = self.lf_model.predict(x_hf)
+        if isinstance(y_lf_at_hf, tuple):  y_lf_at_hf = y_lf_at_hf[0]  # Prevent KRG's var_pred
 
-        # 4. optimize sigma via LOOCV (Step 3 in paper, Eq 10)
-        dist_matrix = cdist(self.x_hf_train_, self.x_hf_train_, metric='euclidean')
+        y_lf_at_hf_scaled = self.scaler_y.transform(y_lf_at_hf)
 
-        logger.info('optimizing MMFS shape parameter (sigma) via LOOCV...')
+        # Step 4: Optimize sigma via LOOCV
+        dist_matrix = self._compute_dists(self.x_hf_train_, self.x_hf_train_)
+
         res = minimize_scalar(fun=self._loocv_error, bounds=self.sigma_bounds,
-            args=(dist_matrix, y_lf_at_hf_scaled, self.y_hf_train_), method='bounded'
+            args=(dist_matrix, y_lf_at_hf_scaled, self.y_hf_train_), method="bounded"
         )
         self.sigma_ = res.x
-        logger.info(f'{sl.y}optimal sigma found: {self.sigma_:.4f}{sl.q}')
 
-        # 5. compute final coefficients (beta) for each output
+        # Step 5: Compute final coefficients (beta) for each output
         phi_train = self._multiquadric_kernel(dist_matrix, self.sigma_)
 
         self.beta_ = []
-        num_outputs = self.y_hf_train_.shape[1]
+        target_dim = self.y_hf_train_.shape[1]
 
-        for m in range(num_outputs):
-            y_c = y_lf_at_hf_scaled[:, m:m+1]
-            y_e = self.y_hf_train_[:, m:m+1]
+        for m in range(target_dim):
+            y_c = y_lf_at_hf_scaled[:, m:m + 1]
+            y_e = self.y_hf_train_[:, m:m + 1]
 
-            # expansion matrix H (Eq 8)
+            # Construct expansion matrix H
             H = self._construct_expansion_matrix(phi_train, y_c)
 
-            # solve beta (Eq 9: generalized inverse)
+            # Solve beta using generalized inverse
             beta_m = pinv(H) @ y_e
             self.beta_.append(beta_m)
 
         self.is_fitted = True
-        logger.info(f'{sl.g}MMFS training completed.{sl.q}')
 
-    def predict(self, x_test: np.ndarray, y_test: Optional[np.ndarray] = None
-                ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
+    # ------------------------------------------------------------------
+
+    def predict(self, x_pred: np.ndarray) -> np.ndarray:
         """
-        Predicts using the trained MMFS model.
+        Perform model prediction.
 
-        Process:
-        1. Predict LF response at test points.
-        2. Construct cross-correlation matrix between test points and HF training points.
-        3. Apply the expansion matrix transformation and correction coefficients.
+        The prediction process involves:
+        1. Predicting LF response at query points.
+        2. Computing cross-correlation matrix between query points and HF training points.
+        3. Applying the expansion matrix transformation and correction coefficients.
 
         Args:
-            x_test (np.ndarray): Test feature data (num_samples, num_features).
-            y_test (Optional[np.ndarray]): Test target data (num_samples, num_outputs).
+            x_pred (np.ndarray): Prediction inputs of shape (num_samples, input_dim), dtype: float64.
 
         Returns:
-            Union[np.ndarray, Tuple[np.ndarray, Dict[str, float]]]:
-                If y_test is available: Returns a Tuple: (y_pred, metrics)
-                If y_test is None: Returns only y_pred
-
-            y_pred (np.ndarray): Predicted target values
-            metrics (Dict[str, float]): Dictionary of evaluation metrics
+            np.ndarray: Prediction targets of shape (num_samples, target_dim), dtype: float64.
         """
-        if x_test.ndim == 1:
-            x_test = x_test.reshape(-1, 1)
-        if y_test is not None and y_test.ndim == 1:
-            y_test = y_test.reshape(-1, 1)
-
         if not self.is_fitted:
-            raise RuntimeError("Model not fitted. Please call fit() first.")
+            raise RuntimeError("Model has not been fitted.")
 
-        logger.info(f"{sl.g}predicting MMFS...{sl.q}")
+        num_samples = x_pred.shape[0]
+        target_dim = len(self.beta_)
 
-        num_samples = x_test.shape[0]
-        num_outputs = len(self.beta_)
+        # Step 1: Scale prediction inputs
+        x_pred_scaled = self.scaler_x.transform(x_pred)
 
-        # 1. scale test inputs
-        x_test_scaled = self.scaler_x.transform(x_test)
+        # Step 2: Get LF predictions at query points
+        y_lf_at_pred = self.lf_model.predict(x_pred)
+        if isinstance(y_lf_at_pred, tuple):  y_lf_at_pred = y_lf_at_pred[0]  # Prevent KRG's var_pred
 
-        # 2. get LF predictions at test points (y_c in Eq 11)
-        y_lf_at_test_raw = self.lf_model.predict(x_test)
-        if isinstance(y_lf_at_test_raw, tuple):
-            y_lf_at_test_raw = y_lf_at_test_raw[0]
-        y_lf_at_test_scaled = self.scaler_y.transform(y_lf_at_test_raw)
+        y_lf_at_pred_scaled = self.scaler_y.transform(y_lf_at_pred)
 
-        # 3. calculate cross-distances and phi matrix (Step 5 in paper)
-        dists_test = cdist(x_test_scaled, self.x_hf_train_, metric="euclidean")
-        phi_test = self._multiquadric_kernel(dists_test, self.sigma_)
+        # Step 3: Calculate cross-distances and kernel matrix
+        dists_pred = self._compute_dists(x_pred_scaled, self.x_hf_train_)
+        phi_pred = self._multiquadric_kernel(dists_pred, self.sigma_)
 
-        # 4. compute predictions (Step 6 in paper)
-        y_pred_scaled = np.zeros((num_samples, num_outputs))
+        # Step 4: Compute predictions for each output dimension
+        y_pred_scaled = np.zeros((num_samples, target_dim), dtype=np.float64)
 
-        for m in range(num_outputs):
-            y_c_test = y_lf_at_test_scaled[:, m:m+1]
+        for m in range(target_dim):
+            y_c_pred = y_lf_at_pred_scaled[:, m:m + 1]
             beta_m = self.beta_[m]
 
-            # construct expansion matrix H* (Eq 12)
-            # H* = [diag(y_c_test) * phi_test, phi_test]
-            H_star = self._construct_expansion_matrix(phi_test, y_c_test)
+            # Construct expansion matrix H*
+            H_star = self._construct_expansion_matrix(phi_pred, y_c_pred)
 
-            # Eq 11: Y(x) = H* . beta
-            y_pred_scaled[:, m:m+1] = H_star @ beta_m
+            # Y(x) = H* @ beta
+            y_pred_scaled[:, m:m + 1] = H_star @ beta_m
 
-        # 5. inverse scale predictions
+        # Step 5: Inverse scale predictions
         y_pred = self.scaler_y.inverse_transform(y_pred_scaled)
 
-        logger.info(f'{sl.g}MMFS prediction completed.{sl.q}')
-
-        # 6.1 inference mode
-        if y_test is None:
-            return y_pred
-
-        # 6.2 evaluation mode
-        r2 = r2_score(y_test, y_pred)
-        mse = mean_squared_error(y_test, y_pred)
-        rmse = np.sqrt(mse)
-
-        metrics = {"r2": r2, "mse": mse, "rmse": rmse}
-
-        return y_pred, metrics
-
-
-# ======================================================================
-# Example Usage
-# ======================================================================
-if __name__ == "__main__":
-    np.random.seed(42)
-
-    # --- benchmark functions (Forretal function from paper Eq 14 & 15) ---
-    def forretal_hf(x: np.ndarray) -> np.ndarray:
-        return (6 * x - 2)**2 * np.sin(12 * x - 4)
-
-    def forretal_lf(x: np.ndarray) -> np.ndarray:
-        # Variant A: y_c = 0.5 * y_e + 10(x - 0.5) - 5
-        return 0.5 * forretal_hf(x) + 10 * (x - 0.5) - 5
-
-    # --- data generation ---
-    # training: low fidelity (dense)
-    x_lf_train = np.linspace(0, 1, 50).reshape(-1, 1)
-    y_lf_train = forretal_lf(x_lf_train)
-
-    # training: high fidelity (sparse)
-    x_hf_train = np.linspace(0, 1, 8).reshape(-1, 1)
-    y_hf_train = forretal_hf(x_hf_train)
-
-    # testing
-    x_test = np.linspace(0, 1, 100).reshape(-1, 1)
-    y_test = forretal_hf(x_test)
-
-    # --- model execution ---
-    # instantiate MMFS
-    model = MMFS()
-
-    # train
-    model.fit(x_lf_train, y_lf_train, x_hf_train, y_hf_train)
-
-    # predict
-    y_pred, test_metrics = model.predict(x_test, y_test)
-
-    # log results
-    logger.info(f'--- Forretal Function Results ---')
-    logger.info(f'Testing R2: {sl.m}{test_metrics["r2"]:.9f}{sl.q}')
-    logger.info(f'Testing MSE: {sl.m}{test_metrics["mse"]:.9f}{sl.q}')
-    logger.info(f'Testing RMSE: {sl.m}{test_metrics["rmse"]:.9f}{sl.q}')
+        return y_pred

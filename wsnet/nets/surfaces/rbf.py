@@ -74,10 +74,10 @@ class RBF:
         PCA initialization using SVD.
 
         Args:
-            x (np.ndarray): Inputs. Shape: (num_samples, input_dim)
+            x (np.ndarray): Inputs of shape: (num_samples, input_dim), dtype: float64.
 
         Returns:
-            np.ndarray: Initial centers. Shape: (num_centers, input_dim)
+            np.ndarray: Initial centers of shape: (num_centers, input_dim), dtype: float64.
         """
         u, s, vt = np.linalg.svd(x, full_matrices=False)
         x_pca = u @ np.diag(s)
@@ -94,10 +94,10 @@ class RBF:
         Simple Lloyd KMeans.
 
         Args:
-            x (np.ndarray): Inputs. Shape: (num_samples, spatial_dim)
+            x (np.ndarray): Inputs of shape: (num_samples, spatial_dim), dtype: float64.
 
         Returns:
-            np.ndarray: Centers. Shape: (num_centers, spatial_dim)
+            np.ndarray: Centers of shape: (num_centers, spatial_dim), dtype: float64.
         """
         centers = self._init_centers(x)
 
@@ -128,10 +128,10 @@ class RBF:
         Constructs Gaussian RBF feature matrix.
 
         Args:
-            x (np.ndarray): Inputs. Shape: (num_samples, input_dim)
+            x (np.ndarray): Inputs of shape: (num_samples, input_dim), dtype: float64.
 
         Returns:
-            np.ndarray: Feature matrix. Shape: (num_samples, num_centers)
+            np.ndarray: Feature matrix of shape: (num_samples, num_centers), dtype: float64.
         """
         dists = self._compute_dists(x, self.centers)
         return np.exp(-self.gamma * dists)
@@ -140,17 +140,12 @@ class RBF:
 
     def fit(self, x_train: np.ndarray, y_train: np.ndarray) -> None:
         """
-        Performs model training.
+        Perform model training.
 
         Args:
-            x_train (np.ndarray): Training inputs. Shape: (num_samples, input_dim).
-            y_train (np.ndarray): Training targets. Shape: (num_samples, target_dim).
+            x_train (np.ndarray): Training inputs of shape: (num_samples, input_dim), dtype: float64.
+            y_train (np.ndarray): Training targets of shape: (num_samples, target_dim), dtype: float64.
         """
-        if x_train.ndim == 1:
-            x_train = x_train[:, None]
-        if y_train.ndim == 1:
-            y_train = y_train[:, None]
-
         x_scaled = self.scaler_x.fit(x_train, channel_dim=1).transform(x_train)
         y_scaled = self.scaler_y.fit(y_train, channel_dim=1).transform(y_train)
 
@@ -179,27 +174,21 @@ class RBF:
 
     def predict(self, x_pred: np.ndarray) -> np.ndarray:
         """
-        Performs model prediction.
+        Perform model prediction.
 
         Args:
-            x_pred (np.ndarray): Prediction inputs. Shape: (num_samples, input_dim)
+            x_pred (np.ndarray): Prediction inputs of shape: (num_samples, input_dim), dtype: float64.
 
         Returns:
-            np.ndarray: Prediction targets. Shape: (num_samples, target_dim)
+            np.ndarray: Prediction targets of shape: (num_samples, target_dim), dtype: float64.
         """
         if self.centers is None or self.weights is None:
             raise RuntimeError("Model has not been fitted.")
-
-        if x_pred.ndim == 1:
-            x_pred = x_pred[:, None]
 
         x_scaled = self.scaler_x.transform(x_pred)
         phi = self._build_features(x_scaled)
 
         y_scaled = phi @ self.weights
         y_pred = self.scaler_y.inverse_transform(y_scaled)
-
-        if y_pred.shape[1] == 1:
-            y_pred = y_pred.ravel()
 
         return y_pred

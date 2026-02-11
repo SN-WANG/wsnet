@@ -1,20 +1,13 @@
 # Infill Criteria for Sequential Sampling
 # Author: Shengning Wang
 
-import os
-import sys
+import warnings
 import numpy as np
 from scipy.stats import norm
 from scipy.optimize import minimize, Bounds
 from typing import Union, List
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 from wsnet.nets.surfaces.krg import KRG
-from wsnet.utils.engine import sl, logger
 
 
 class Infill:
@@ -69,8 +62,6 @@ class Infill:
         self.kappa = kappa
 
         # determine current best solution (minimization)
-        if y_train.ndim == 1:
-            y_train = y_train.reshape(-1, 1)
         self.y_min = np.min(y_train[:, self.target_index])
 
         # dispatch logic for criterion function
@@ -175,9 +166,6 @@ class Infill:
         Returns:
             np.ndarray: Utility values. shape: (num_samples, 1).
         """
-        if x.ndim == 1:
-            x = x.reshape(1, -1)
-
         # 1. predict using the pre-trained KRG model
         y_pred, mse_pred = self.model.predict(x)
 
@@ -208,14 +196,12 @@ class Infill:
 
         # define objective: minimize negative utility
         def min_obj(x_vec: np.ndarray) -> float:
-            x_reshaped = x_vec.reshape(1, -1)
+            x_reshaped = x_vec[None, :]
             utility = self.evaluate(x_reshaped)
             return -float(utility.flatten()[0])
 
         best_x = None
         best_utility = -np.inf
-
-        logger.info(f"optimizing infill criterion ({self.criterion_name})...")
 
         # multi-start optimization
         for i in range(self.num_restarts):
@@ -237,69 +223,7 @@ class Infill:
 
         if best_x is None:
              # fallback if optimization fails completely (rare)
-            logger.warning("optimization failed to converge, returning random point.")
+            warnings.warn("optimization failed to converge, returning random point.", RuntimeWarning)
             best_x = np.random.uniform(self.bounds[:, 0], self.bounds[:, 1], size=num_features)
 
-        logger.info(f"{sl.g}infill proposal completed.{sl.q}")
-
-        return best_x.reshape(1, -1)
-
-
-# ======================================================================
-# Example Usage
-# ======================================================================
-if __name__ == "__main__":
-    np.random.seed(42)
-
-    # 1. define physics problem (Branin function)
-    def branin(x):
-        x1, x2 = x[:, 0], x[:, 1]
-        a, b, c, r, s, t = 1.0, 5.1 / (4.0 * np.pi**2), 5.0 / np.pi, 6.0, 10.0, 1.0 / (8.0 * np.pi)
-        return a * (x2 - b * x1**2 + c * x1 - r)**2 + s * (1 - t) * np.cos(x1) + s
-
-    bounds = np.array([[-5.0, 10.0], [0.0, 15.0]])
-
-    # 2. initial data generation
-    logger.info(f"{sl.b}--- Phase 1: Initial Training ---{sl.q}")
-    x_train = np.random.uniform(bounds[:, 0], bounds[:, 1], size=(20, 2))
-    y_train = branin(x_train).reshape(-1, 1)
-
-    # independent test set
-    x_test = np.random.uniform(bounds[:, 0], bounds[:, 1], size=(100, 2))
-    y_test = branin(x_test).reshape(-1, 1)
-
-    # 3. train surrogate model (KRG)
-    krg = KRG(poly="constant", kernel="gaussian", theta0=1.0)
-    krg.fit(x_train, y_train)
-
-    # evaluate baseline
-    _, _, metrics_v0 = krg.predict(x_test, y_test)
-    logger.info(f"baseline R2: {sl.m}{metrics_v0["r2"]:.6f}{sl.q}")
-
-    # 4. sequential sampling using Infill class
-    logger.info(f"{sl.b}--- Phase 2: Sequential Infill (EI) ---{sl.q}")
-
-    # initialize infill with PRE-TRAINED model
-    # we choose "ei" (Expected Improvement)
-    infill = Infill(model=krg, bounds=bounds, y_train=y_train, criterion="ei")
-
-    # propose new point
-    x_new = infill.propose()
-    y_new = branin(x_new).reshape(-1, 1)
-
-    logger.info(f"proposed point: {x_new.flatten()}")
-    logger.info(f"actual value at point: {y_new.flatten()[0]:.4f}")
-
-    # 5. update data and retrain
-    logger.info(f"{sl.b}--- Phase 3: Model Update ---{sl.q}")
-    
-    x_train_upd = np.vstack([x_train, x_new])
-    y_train_upd = np.vstack([y_train, y_new])
-
-    # retrain the SAME model object
-    krg.fit(x_train_upd, y_train_upd)
-
-    # evaluate updated model
-    _, _, metrics_v1 = krg.predict(x_test, y_test)
-
-    logger.info(f"updated R2: {sl.m}{metrics_v1["r2"]:.6f}{sl.q}")
+        return best_x[None, :]

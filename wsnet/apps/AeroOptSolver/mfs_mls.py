@@ -48,9 +48,10 @@ class MFSMLS:
                 1 for linear, 2 for quadratic. Default is 2.
         """
         # parameters
-        self.poly_degree = poly_degree
         params = lf_model_params if lf_model_params is not None else {}
         self.lf_model = RBF(**params)
+
+        self.poly_degree = poly_degree
 
         # scalers
         self.scaler_x = StandardScalerNP()
@@ -154,7 +155,7 @@ class MFSMLS:
 
     def fit(self, x_lf: np.ndarray, y_lf: np.ndarray, x_hf: np.ndarray, y_hf: np.ndarray) -> None:
         """
-        Performs model training.
+        Perform model training.
 
         The training process involves:
         1. Training the LF surrogate model on raw LF data.
@@ -168,12 +169,6 @@ class MFSMLS:
             x_hf (np.ndarray): High-fidelity inputs of shape (num_hf_samples, input_dim).
             y_hf (np.ndarray): High-fidelity targets of shape (num_hf_samples, target_dim).
         """
-        # Ensure 2D arrays
-        if x_lf.ndim == 1:  x_lf = x_lf[:, None]
-        if y_lf.ndim == 1:  y_lf = y_lf[:, None]
-        if x_hf.ndim == 1:  x_hf = x_hf[:, None]
-        if y_hf.ndim == 1:  y_hf = y_hf[:, None]
-
         # Step 1: Train LF model on raw data
         self.lf_model.fit(x_lf, y_lf)
 
@@ -183,8 +178,8 @@ class MFSMLS:
 
         # Step 3: Construct augmented basis matrix P = [y_lf(x_hf), poly_basis(x_hf)]
         y_lf_at_hf = self.lf_model.predict(x_hf)
-        if isinstance(y_lf_at_hf, tuple):  # for Kriging's var_pred output
-            y_lf_at_hf = y_lf_at_hf[0]
+        if isinstance(y_lf_at_hf, tuple):  y_lf_at_hf = y_lf_at_hf[0]  # Prevent KRG's var_pred
+
         y_lf_at_hf_scaled = self.scaler_y.transform(y_lf_at_hf)
 
         poly_basis = self._build_polynomial_features(self.x_hf_train_)
@@ -200,7 +195,7 @@ class MFSMLS:
 
     def predict(self, x_pred: np.ndarray) -> np.ndarray:
         """
-        Performs model prediction.
+        Perform model prediction.
 
         For each query point, solves a local Weighted Least Squares problem:
         A(x) = (P^T * W(x) * P)^{-1} * P^T * W(x) * Y
@@ -215,9 +210,6 @@ class MFSMLS:
         if not self.is_fitted:
             raise RuntimeError("Model has not been fitted.")
 
-        if x_pred.ndim == 1:
-            x_pred = x_pred[:, None]
-
         num_samples = x_pred.shape[0]
         num_hf_samples, num_basis = self.p_train_.shape
         target_dim = self.y_hf_train_.shape[1]
@@ -227,6 +219,8 @@ class MFSMLS:
 
         # Step 2: Prepare basis for query points
         y_lf_at_pred = self.lf_model.predict(x_pred)
+        if isinstance(y_lf_at_pred, tuple):  y_lf_at_pred = y_lf_at_pred[0]  # Prevent KRG's var_pred
+
         y_lf_at_pred_scaled = self.scaler_y.transform(y_lf_at_pred)
 
         poly_basis_pred = self._build_polynomial_features(x_pred_scaled)
@@ -269,41 +263,3 @@ class MFSMLS:
         y_pred = self.scaler_y.inverse_transform(y_pred_scaled)
 
         return y_pred
-
-
-# ==============================================================================
-# Example Usage
-# ==============================================================================
-if __name__ == "__main__":
-    np.random.seed(42)
-
-    def target_hf(x: np.ndarray) -> np.ndarray:
-        """High-fidelity target function."""
-        return np.hstack([x * np.sin(x), 0.1 * x**2 + np.cos(x)])
-
-    def target_lf(x: np.ndarray) -> np.ndarray:
-        """Low-fidelity target function (biased approximation)."""
-        return 0.8 * target_hf(x) - 0.5 * x
-
-    # Training samples
-    x_lf_train = np.linspace(0, 10, 50).reshape(-1, 1)
-    y_lf_train = target_lf(x_lf_train)
-
-    x_hf_train = np.linspace(0, 10, 10).reshape(-1, 1)
-    y_hf_train = target_hf(x_hf_train)
-
-    # preding samples
-    x_pred = np.linspace(0, 10, 100).reshape(-1, 1)
-    y_pred = target_hf(x_pred)
-
-    # Instantiate and train model
-    model = MFSMLS()
-    model.fit(x_lf_train, y_lf_train, x_hf_train, y_hf_train)
-
-    # pred model
-    y_pred, pred_metrics = model.predict(x_pred, y_pred)
-
-    # # Log results
-    # logger.info(f"preding R2: {sl.m}{pred_metrics['r2']:.9f}{sl.q}")
-    # logger.info(f"preding MSE: {sl.m}{pred_metrics['mse']:.9f}{sl.q}")
-    # logger.info(f"preding RMSE: {sl.m}{pred_metrics['rmse']:.9f}{sl.q}")
