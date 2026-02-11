@@ -175,8 +175,7 @@ def train_pipeline(args: argparse.Namespace) -> None:
     trainer = AutoregressiveTrainer(model=model, lr=args.lr, max_epochs=args.max_epochs,
                                     scalers=scalers, output_dir=output_dir, device=args.device,
                                     weight_decay=args.weight_decay, eta_min=args.eta_min,
-                                    max_rollout_steps=args.max_rollout_steps,
-                                    curr_patience=args.curr_patience, curr_sensitivity=args.curr_sensitivity,
+                                    max_rollout_steps=args.max_rollout_steps, rollout_patience=args.rollout_patience,
                                     noise_std_init=args.noise_std_init, noise_decay=args.noise_decay)
 
     trainer.fit(train_loader, val_loader)

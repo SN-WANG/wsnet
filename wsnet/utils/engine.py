@@ -414,6 +414,13 @@ class BaseTrainer:
 
         return float(np.mean(losses))
 
+    def _on_epoch_start(self, **kwargs) -> None:
+        """
+        Optional hook called at the start of each epoch.
+        Default implementation is a no-op.
+        """
+        pass
+
     def _on_epoch_end(self, **kwargs) -> None:
         """
         Optional hook called at the end of each epoch.
@@ -453,12 +460,15 @@ class BaseTrainer:
             self.current_epoch = epoch + 1
             ep_start = time.time()
 
+            # call hook function
+            self._on_epoch_start()
+
             # train & validate
             train_loss = self._run_epoch(train_loader, is_training=True)
             val_loss = self._run_epoch(val_loader, is_training=False) if val_loader else None
 
             # call hook function
-            self._on_epoch_end(val_loss)
+            self._on_epoch_end(train_loss, val_loss)
 
             # scheduler step
             if self.scheduler:
@@ -532,7 +542,7 @@ class AutoregressiveTrainer(BaseTrainer):
                  lr: float = 1e-3, max_epochs: int = 500,
                  weight_decay: float = 1e-5, eta_min: float = 1e-6,
                  # curriculum params
-                 max_rollout_steps: int = 5, curr_patience: int = 10, curr_sensitivity: float = 0.01,
+                 max_rollout_steps: int = 5, rollout_patience: int = 10,
                  noise_std_init: float = 0.05, noise_decay: float = 0.9,
                  # base params
                  **kwargs):
@@ -542,8 +552,7 @@ class AutoregressiveTrainer(BaseTrainer):
             lr, weight_decay: AdamW parameters.
             max_epochs, eta_min: CosineAnnealingLR parameters.
             max_rollout_steps (int): Max steps for autoregressive rollout.
-            curr_patience (int): Epochs of stable loss to trigger curriculum advance.
-            curr_sensitivity (float): Threshold for loss improvement.
+            rollout_patience (int): Epochs of stable loss to trigger curriculum advance.
             noise_std_init (float): Initial noise injection std dev.
             noise_decay (float): Multiplier for noise when curriculum advances.
             **kwargs: Arguments passed to BaseTrainer.
@@ -571,56 +580,41 @@ class AutoregressiveTrainer(BaseTrainer):
 
         # 2. Store hyperparameters
         self.max_rollout_steps = max_rollout_steps
-        self.curr_patience = curr_patience
-        self.curr_sensitivity = curr_sensitivity
+        self.rollout_patience = rollout_patience
         self.noise_std_init = noise_std_init
         self.noise_decay = noise_decay
 
         # 3. Initialize curriculum state
+        self.rollout_counter = 0
+        self.log_update_info = False
         self.current_rollout_steps = 1
         self.current_noise_std = noise_std_init
-        self.stable_epochs_counter = 0
-        self.prev_val_loss = float("inf")
 
-    def _update_curriculum(self, val_loss: float) -> None:
+    def _update_curriculum(self) -> None:
         """
-        Update curriculum state based on validation loss trajectory.
+        Update curriculum state.
         Strategy: If loss stablizes, we increase difficulty (steps) and decrease assistance (noise).
         """
+        self.rollout_counter += 1
 
-        # calculate relative improvement
-        if self.prev_val_loss == float("inf") or self.prev_val_loss < 1e-9:
-            rel_improv = 0.0
-        else:
-            rel_improv = (self.prev_val_loss - val_loss) / self.prev_val_loss
-
-        self.prev_val_loss = val_loss
-
-        is_stable = rel_improv < self.curr_sensitivity and val_loss < 1.0
-        if is_stable:
-            self.stable_epochs_counter += 1
-        else:
-            self.stable_epochs_counter = 0
-
-        # trigger advance
-        if self.stable_epochs_counter >= self.curr_patience:
+        if self.rollout_counter >= self.rollout_patience:
             if self.current_rollout_steps < self.max_rollout_steps:
                 self.current_rollout_steps += 1
                 self.current_noise_std *= self.noise_decay
-                self.stable_epochs_counter = 0
-                self.prev_val_loss = float("inf")
-                logger.info(f"{sl.y}curriculum update:{sl.q} "
-                            f"steps = {sl.m}{self.current_rollout_steps}{sl.q}, "
-                            f"noise = {sl.m}{self.current_noise_std:.4f}{sl.q}")
+                self.rollout_counter = 0
+                self.log_update_info = True
 
-    def _on_epoch_end(self, val_loss: float) -> None:
-        """
-        Updates the curriculum parameters based on validation loss at the end of each epoch.
+        if self.log_update_info and self.rollout_counter == 1:
+            logger.info(f"{sl.y}curriculum update:{sl.q} "
+                        f"steps = {sl.m}{self.current_rollout_steps}{sl.q}, "
+                        f"noise = {sl.m}{self.current_noise_std:.4f}{sl.q}")
+            self.log_update_info = False
 
-        Args:
-            val_loss (float): Validation loss from the current epoch.
+    def _on_epoch_end(self, train_loss=None, val_loss=None) -> None:
         """
-        self._update_curriculum(val_loss)
+        Updates the curriculum parameters based at the start of each epoch.
+        """
+        self._update_curriculum()
 
     def _compute_loss(self, batch: Any) -> Tensor:
         """

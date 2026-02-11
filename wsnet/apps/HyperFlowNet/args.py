@@ -80,10 +80,8 @@ def get_args() -> argparse.Namespace:
     # curriculum
     parser.add_argument("--max_rollout_steps", type=int, default=20, 
                         help="Maximum autoregressive rollout steps allowed.")
-    parser.add_argument("--curr_patience", type=int, default=10, 
+    parser.add_argument("--rollout_patience", type=int, default=40, 
                         help="Epochs of stable loss required to increase rollout difficulty.")
-    parser.add_argument("--curr_sensitivity", type=float, default=0.05, 
-                        help="Relative improvement threshold to consider loss as 'stable'.")
     parser.add_argument("--noise_std_init", type=float, default=0.01, 
                         help="Initial Std dev of Gaussian noise injected into input state.")
     parser.add_argument("--noise_decay", type=float, default=0.7, 
