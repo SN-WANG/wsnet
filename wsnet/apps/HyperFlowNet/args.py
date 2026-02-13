@@ -16,7 +16,7 @@ def get_args() -> argparse.Namespace:
     # ----------------------------------------------------------------------
     # 1. General Settings
     # ----------------------------------------------------------------------
-    parser.add_argument("--seed", type=int, default=2026,
+    parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility across numpy and torch.")
     parser.add_argument("--output_dir", type=str, default="./runs",
                         help="Root directory to save checkpoints, logs, and animations.")
@@ -34,7 +34,7 @@ def get_args() -> argparse.Namespace:
                         help="Name list of the channels.")
     parser.add_argument("--spatial_dim", type=int, default=2, choices=[2, 3],
                         help="Spatial dimension of the fluid flow (2D or 3D).")
-    parser.add_argument("--win_len", type=int, default=21, 
+    parser.add_argument("--win_len", type=int, default=8, 
                         help="Total window length for data slicing (input + label sequence).")
     parser.add_argument("--win_stride", type=int, default=1, 
                         help="Stride for sliding window augmentation.")
@@ -56,7 +56,7 @@ def get_args() -> argparse.Namespace:
                         help="Number of hidden channels in the FNO blocks.")
 
     # Deformation Net Params
-    parser.add_argument("--deform_layers", type=int, default=3, 
+    parser.add_argument("--deform_layers", type=int, default=2, 
                         help="Number of layers in the coordinate deformation network.")
     parser.add_argument("--deform_hidden", type=int, default=32, 
                         help="Hidden dimension size for the deformation network.")
@@ -72,13 +72,13 @@ def get_args() -> argparse.Namespace:
                         help="Weight decay (L2 regularization) factor.")
 
     # scheduler (Cosine Annealing LR)
-    parser.add_argument("--max_epochs", type=int, default=1500, 
+    parser.add_argument("--max_epochs", type=int, default=350, 
                         help="Total number of training epochs.")
     parser.add_argument("--eta_min", type=float, default=1e-6, 
                         help="Minimum learning rate.")
 
     # curriculum
-    parser.add_argument("--max_rollout_steps", type=int, default=20, 
+    parser.add_argument("--max_rollout_steps", type=int, default=7, 
                         help="Maximum autoregressive rollout steps allowed.")
     parser.add_argument("--rollout_patience", type=int, default=40, 
                         help="Epochs of stable loss required to increase rollout difficulty.")

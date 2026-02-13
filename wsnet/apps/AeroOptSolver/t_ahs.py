@@ -10,7 +10,6 @@ from wsnet.nets.surfaces.prs import PRS
 from wsnet.nets.surfaces.rbf import RBF
 from wsnet.nets.surfaces.krg import KRG
 from wsnet.nets.surfaces.svr import SVR
-from wsnet.utils.scaler import StandardScalerNP
 
 
 class TAHS:
@@ -30,8 +29,6 @@ class TAHS:
         baseline_index_ (int): Index of the best performing model (baseline).
         uncertainty_model_ (KRG): A dedicated Kriging model used solely for estimating
             local process variance (s^2) for weighting.
-        scaler_x (StandardScalerNP): Normalization processor for input features.
-        scaler_y (StandardScalerNP): Normalization processor for target responses.
         is_fitted (bool): Status flag indicating if the model has been trained.
     """
 
@@ -73,10 +70,6 @@ class TAHS:
 
         # dedicated model for variance estimation
         self.uncertainty_model_ = KRG(**krg_params)
-
-        # scalers
-        self.scaler_x = StandardScalerNP()
-        self.scaler_y = StandardScalerNP()
 
         # model state
         self.activate_indices_: List[int] = []

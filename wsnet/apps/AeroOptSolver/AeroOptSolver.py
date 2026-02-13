@@ -13,11 +13,15 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from wsnet.nets.surfaces.krg import KRG
+
 from wsnet.utils.doe import lhs_design
 from wsnet.utils.infill import Infill
 from wsnet.utils.engine import sl, logger, seed_everything
 
 from wsnet.apps.AeroOptSolver.t_ahs import TAHS
+from wsnet.apps.AeroOptSolver.aes_msi import AESMSI
+
+from wsnet.apps.AeroOptSolver.mfs_mls import MFSMLS
 from wsnet.apps.AeroOptSolver.mmfs import MMFS
 
 
@@ -226,7 +230,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # 3. Model A: T-AHS (Two-Stage Adaptive Hybrid Surrogate)
     # ------------------------------------------------------------------
-    logger.info(f"{sl.b}>>> Training Model A: T-AHS{sl.q}")
+    logger.info(f"{sl.b}>>> Model A: T-AHS{sl.q}")
 
     model_tahs = TAHS()
     model_tahs.fit(x_train, y_train)
@@ -235,9 +239,31 @@ if __name__ == "__main__":
     evaluate_metrics(y_test, y_pred_tahs, "T-AHS")
 
     # ------------------------------------------------------------------
-    # 4. Model B: MMFS (Modified Multi-Fidelity Surrogate)
+    # 4. Model B: AES-MSI (Adaptive Ensemble of Surrogate Models by Minimum Screening Index)
     # ------------------------------------------------------------------
-    logger.info(f"{sl.b}>>> Training Model B: MMFS{sl.q}")
+    logger.info(f"{sl.b}>>> Model B: AES-MSI{sl.q}")
+
+    model_aesmsi = AESMSI()
+    model_aesmsi.fit(x_train, y_train)
+
+    y_pred_aesmsi = model_aesmsi.predict(x_test)
+    evaluate_metrics(y_test, y_pred_aesmsi, "AES-MSI")
+
+    # ------------------------------------------------------------------
+    # 5. Model C: MFS-MLS (Multi-Fidelity Surrogate Model based on Moving Least Squares)
+    # ------------------------------------------------------------------
+    logger.info(f"{sl.b}>>> Model C: MFS-MLS{sl.q}")
+
+    model_mfsmls = MFSMLS()
+    model_mfsmls.fit(x_lf, y_lf, x_hf, y_hf)
+
+    y_pred_mfsmls = model_mfsmls.predict(x_test)
+    evaluate_metrics(y_test, y_pred_mfsmls, "MFS-MLS")
+
+    # ------------------------------------------------------------------
+    # 6. Model D: MMFS (Modified Multi-Fidelity Surrogate)
+    # ------------------------------------------------------------------
+    logger.info(f"{sl.b}>>> Model D: MMFS{sl.q}")
 
     model_mmfs = MMFS()
     model_mmfs.fit(x_lf, y_lf, x_hf, y_hf)
@@ -246,9 +272,9 @@ if __name__ == "__main__":
     evaluate_metrics(y_test, y_pred_mmfs, "MMFS")
 
     # ------------------------------------------------------------------
-    # 5. Model C: KRG + Sequential Infill (Active Learning)
+    # 7. Model E: KRG + Sequential Infill (Active Learning)
     # ------------------------------------------------------------------
-    logger.info(f"{sl.b}>>> Training Model C: KRG with Infill{sl.q}")
+    logger.info(f"{sl.b}>>> Model E: KRG with Infill{sl.q}")
 
     # initial krg training
     # using a copy of training data to allow appending without affecting original sets
@@ -290,7 +316,7 @@ if __name__ == "__main__":
     evaluate_metrics(y_test, y_pred_krg, "KRG + Infill")
 
     # ------------------------------------------------------------------
-    # 6. Global Optimization on Surrogate Surface
+    # 8. Global Optimization on Surrogate Surface
     # ------------------------------------------------------------------
     logger.info(f"{sl.b}>>> Performing Global Optimization{sl.q}")
 
@@ -307,13 +333,8 @@ if __name__ == "__main__":
 
     # using differential evolution (robust global optimizer)
     result = differential_evolution(
-        func=surrogate_objective,
-        bounds=scipy_bounds,
-        strategy="best1bin",
-        maxiter=50,
-        popsize=10,
-        tol=1e-6,
-        seed=42
+        func=surrogate_objective, bounds=scipy_bounds, strategy="best1bin",
+        maxiter=50, popsize=10, tol=1e-6, seed=42
     )
 
     best_x = result.x
