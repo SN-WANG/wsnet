@@ -18,11 +18,14 @@ from wsnet.utils.doe import lhs_design
 from wsnet.utils.infill import Infill
 from wsnet.utils.engine import sl, logger, seed_everything
 
+# Ensemble Surrogate Model
 from wsnet.apps.AeroOptSolver.t_ahs import TAHS
 from wsnet.apps.AeroOptSolver.aes_msi import AESMSI
 
+# Multi-fidelity Surrogate Model
 from wsnet.apps.AeroOptSolver.mfs_mls import MFSMLS
 from wsnet.apps.AeroOptSolver.mmfs import MMFS
+from wsnet.apps.AeroOptSolver.cca_mfs import CCAMFS
 
 
 # ----------------------------------------------------------------------
@@ -72,13 +75,13 @@ class AbaqusModel:
         # compute 4 different outputs based on the 3 inputs
         # output 1: weight (primary objective)
         y1 = base_func(x[0], x[1]) + 2.0 * x[2]
-        
+
         # output 2: displacement
         y2 = 0.5 * x[0]**2 + 1.2 * x[1] + np.sin(x[2])
-        
+
         # output 3: stress_skin
         y3 = base_func(x[1], x[2]) + 0.8 * x[0]
-        
+
         # output 4: stress_stiff
         y4 = (x[0] - 5)**2 + (x[1] - 5)**2 + (x[2] - 5)**2
 
@@ -128,7 +131,7 @@ def run_abaqus_batch(x: np.ndarray, fidelity: str = "high") -> np.ndarray:
 
     # instantiate model with specific fidelity
     model = AbaqusModel(fidelity=fidelity)
-    
+
     logger.info(f"running abaqus batch (fidelity={fidelity}, samples={num_samples})...")
 
     for i in range(num_samples):
@@ -272,9 +275,20 @@ if __name__ == "__main__":
     evaluate_metrics(y_test, y_pred_mmfs, "MMFS")
 
     # ------------------------------------------------------------------
-    # 7. Model E: KRG + Sequential Infill (Active Learning)
+    # 7. Model E: CCA-MFS (Multi-Fidelity Surrogate Model based on Canonical Correlation Analysis and Least Squares)
     # ------------------------------------------------------------------
-    logger.info(f"{sl.b}>>> Model E: KRG with Infill{sl.q}")
+    logger.info(f"{sl.b}>>> Model E: CCA-MFS{sl.q}")
+
+    model_ccamfs = CCAMFS()
+    model_ccamfs.fit(x_lf, y_lf, x_hf, y_hf)
+
+    y_pred_ccamfs = model_ccamfs.predict(x_test)
+    evaluate_metrics(y_test, y_pred_ccamfs, "CCA-MFS")
+
+    # ------------------------------------------------------------------
+    # 8. Model F: KRG + Sequential Infill (Active Learning)
+    # ------------------------------------------------------------------
+    logger.info(f"{sl.b}>>> Model F: KRG with Infill{sl.q}")
 
     # initial krg training
     # using a copy of training data to allow appending without affecting original sets
@@ -316,7 +330,7 @@ if __name__ == "__main__":
     evaluate_metrics(y_test, y_pred_krg, "KRG + Infill")
 
     # ------------------------------------------------------------------
-    # 8. Global Optimization on Surrogate Surface
+    # 9. Global Optimization on Surrogate Surface
     # ------------------------------------------------------------------
     logger.info(f"{sl.b}>>> Performing Global Optimization{sl.q}")
 

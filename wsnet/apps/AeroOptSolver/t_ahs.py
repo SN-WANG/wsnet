@@ -1,4 +1,4 @@
-# Two-Stage Adaptive Hybrid Surrogate (T-AHS) Model
+# T-AHS: Two-Stage Adaptive Hybrid Surrogate Model
 # Paper reference: https://doi.org/10.1115/1.4039128
 # Paper author: Xueguan Song, Liye Lv, Jieling Li, Wei Sun, Jie Zhang
 # Code author: Shengning Wang

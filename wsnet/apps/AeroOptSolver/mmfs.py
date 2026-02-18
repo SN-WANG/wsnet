@@ -1,4 +1,4 @@
-# Modified Multi-Fidelity Surrogate Model based on RBF with Adaptive Scale Factor (MMFS)
+# MMFS: Modified Multi-Fidelity Surrogate Model based on RBF with Adaptive Scale Factor
 # Paper reference: https://doi.org/10.1186/s10033-022-00742-z
 # Paper author: Yin Liu, Shuo Wang, Qi Zhou, Liye Lv, Wei Sun, Xueguan Song
 # Code author: Shengning Wang

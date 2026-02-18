@@ -1,4 +1,4 @@
-# Multi-Fidelity Surrogate Model based on Moving Least Squares (MFS-MLS)
+# MFS-MLS: Multi-Fidelity Surrogate Model based on Moving Least Squares
 # Paper reference: https://doi.org/10.1007/s00158-021-03044-5
 # Paper author: Shuo Wang, Yin Liu, Qi Zhou, Yongliang Yuan, Liye Lv, Xueguan Song
 # Code author: Shengning Wang

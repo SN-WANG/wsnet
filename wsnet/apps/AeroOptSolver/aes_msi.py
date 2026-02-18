@@ -73,6 +73,8 @@ class AESMSI:
         self.baseline_index_: int = -1
         self.is_fitted: bool = False
 
+    # ------------------------------------------------------------------
+
     def _calculate_loo_error(self, model: object, x: np.ndarray, y: np.ndarray) -> float:
         """
         Calculates the Leave-One-Out (LOO) Mean Squared Error for a given model.
@@ -110,6 +112,8 @@ class AESMSI:
 
         mse = np.mean((y_true_stack - y_pred_stack) ** 2)
         return float(mse)
+
+    # ------------------------------------------------------------------
 
     def _calculate_correlation_matrix(self, predictions: List[np.ndarray]) -> np.ndarray:
         """
@@ -149,6 +153,8 @@ class AESMSI:
                 corr_matrix[j, i] = corr
 
         return corr_matrix
+
+    # ------------------------------------------------------------------
 
     def fit(self, x_train: np.ndarray, y_train: np.ndarray) -> None:
         """
@@ -229,6 +235,8 @@ class AESMSI:
             self.models_pool[i].fit(x_train, y_train)
 
         self.is_fitted = True
+
+    # ------------------------------------------------------------------
 
     def predict(self, x_pred: np.ndarray) -> np.ndarray:
         """
