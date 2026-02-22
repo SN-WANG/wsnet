@@ -7,25 +7,29 @@ import numpy as np
 from scipy.optimize import differential_evolution
 
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path: sys.path.insert(0, project_root)
 
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
 
-from wsnet.nets.surfaces.krg import KRG
+# Base Surrogate Model
+from wsnet.models.classical.krg import KRG
 
-from wsnet.utils.doe import lhs_design
-from wsnet.utils.infill import Infill
-from wsnet.utils.engine import sl, logger, seed_everything
+# Ensemble Surrogate Models
+from wsnet.models.ensemble.t_ahs import TAHS
+from wsnet.models.ensemble.aes_msi import AESMSI
 
-# Ensemble Surrogate Model
-from wsnet.apps.AeroOptSolver.t_ahs import TAHS
-from wsnet.apps.AeroOptSolver.aes_msi import AESMSI
+# Multi-fidelity Surrogate Models
+from wsnet.models.multi_fidelity.mfs_mls import MFSMLS
+from wsnet.models.multi_fidelity.mmfs import MMFS
+from wsnet.models.multi_fidelity.cca_mfs import CCAMFS
 
-# Multi-fidelity Surrogate Model
-from wsnet.apps.AeroOptSolver.mfs_mls import MFSMLS
-from wsnet.apps.AeroOptSolver.mmfs import MMFS
-from wsnet.apps.AeroOptSolver.cca_mfs import CCAMFS
+# Sequential Sampling Methods
+from wsnet.sampling.infill import Infill
+
+# Tools for machine learning experiments
+from wsnet.sampling.doe import lhs_design
+from wsnet.utils.seeder import seed_everything
+from wsnet.utils.hue_logger import hue, logger
 
 
 # ----------------------------------------------------------------------
@@ -159,9 +163,9 @@ def evaluate_metrics(y_true: np.ndarray, y_pred: np.ndarray, label: str):
     r2 = 1.0 - ss_res / (ss_tot + 1e-12)
 
     logger.info(f"--- {label} Performance ---")
-    logger.info(f"R2  : {sl.m}{r2:.6f}{sl.q}")
-    logger.info(f"MSE : {sl.m}{mse:.6f}{sl.q}")
-    logger.info(f"RMSE: {sl.m}{rmse:.6f}{sl.q}")
+    logger.info(f"R2  : {hue.m}{r2:.6f}{hue.q}")
+    logger.info(f"MSE : {hue.m}{mse:.6f}{hue.q}")
+    logger.info(f"RMSE: {hue.m}{rmse:.6f}{hue.q}")
     print("") # spacer
 
 
@@ -172,7 +176,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # 1. Configuration & Initialization
     # ------------------------------------------------------------------
-    logger.info(f"{sl.b}initializing test platform...{sl.q}")
+    logger.info(f"{hue.b}initializing test platform...{hue.q}")
 
     # problem definition based on abaqus model
     # inputs: thick1, thick2, thick3
@@ -228,12 +232,12 @@ if __name__ == "__main__":
     y_lf = run_abaqus_batch(x_lf, fidelity="low")
     y_hf = run_abaqus_batch(x_hf, fidelity="high")
 
-    logger.info(f"{sl.g}data generation complete.{sl.q} train shape: {sl.m}{x_train.shape}{sl.q}")
+    logger.info(f"{hue.g}data generation complete.{hue.q} train shape: {hue.m}{x_train.shape}{hue.q}")
 
     # ------------------------------------------------------------------
     # 3. Model A: T-AHS (Two-Stage Adaptive Hybrid Surrogate)
     # ------------------------------------------------------------------
-    logger.info(f"{sl.b}>>> Model A: T-AHS{sl.q}")
+    logger.info(f"{hue.b}>>> Model A: T-AHS{hue.q}")
 
     model_tahs = TAHS()
     model_tahs.fit(x_train, y_train)
@@ -244,7 +248,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # 4. Model B: AES-MSI (Adaptive Ensemble of Surrogate Models by Minimum Screening Index)
     # ------------------------------------------------------------------
-    logger.info(f"{sl.b}>>> Model B: AES-MSI{sl.q}")
+    logger.info(f"{hue.b}>>> Model B: AES-MSI{hue.q}")
 
     model_aesmsi = AESMSI()
     model_aesmsi.fit(x_train, y_train)
@@ -255,7 +259,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # 5. Model C: MFS-MLS (Multi-Fidelity Surrogate Model based on Moving Least Squares)
     # ------------------------------------------------------------------
-    logger.info(f"{sl.b}>>> Model C: MFS-MLS{sl.q}")
+    logger.info(f"{hue.b}>>> Model C: MFS-MLS{hue.q}")
 
     model_mfsmls = MFSMLS()
     model_mfsmls.fit(x_lf, y_lf, x_hf, y_hf)
@@ -266,7 +270,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # 6. Model D: MMFS (Modified Multi-Fidelity Surrogate)
     # ------------------------------------------------------------------
-    logger.info(f"{sl.b}>>> Model D: MMFS{sl.q}")
+    logger.info(f"{hue.b}>>> Model D: MMFS{hue.q}")
 
     model_mmfs = MMFS()
     model_mmfs.fit(x_lf, y_lf, x_hf, y_hf)
@@ -277,7 +281,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # 7. Model E: CCA-MFS (Multi-Fidelity Surrogate Model based on Canonical Correlation Analysis and Least Squares)
     # ------------------------------------------------------------------
-    logger.info(f"{sl.b}>>> Model E: CCA-MFS{sl.q}")
+    logger.info(f"{hue.b}>>> Model E: CCA-MFS{hue.q}")
 
     model_ccamfs = CCAMFS()
     model_ccamfs.fit(x_lf, y_lf, x_hf, y_hf)
@@ -288,7 +292,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # 8. Model F: KRG + Sequential Infill (Active Learning)
     # ------------------------------------------------------------------
-    logger.info(f"{sl.b}>>> Model F: KRG with Infill{sl.q}")
+    logger.info(f"{hue.b}>>> Model F: KRG with Infill{hue.q}")
 
     # initial krg training
     # using a copy of training data to allow appending without affecting original sets
@@ -315,7 +319,7 @@ if __name__ == "__main__":
 
         # check for failure (nan) before appending
         if np.isnan(y_new).any():
-            logger.info(f"{sl.r}simulation failed (returned NaN). skipping update.{sl.q}")
+            logger.info(f"{hue.r}simulation failed (returned NaN). skipping update.{hue.q}")
             continue
 
         # update dataset
@@ -332,7 +336,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # 9. Global Optimization on Surrogate Surface
     # ------------------------------------------------------------------
-    logger.info(f"{sl.b}>>> Performing Global Optimization{sl.q}")
+    logger.info(f"{hue.b}>>> Performing Global Optimization{hue.q}")
 
     # define objective function based on the best trained surrogate (e.g., KRG)
     # we want to find x that minimizes y[target_index] (weight)
@@ -361,7 +365,7 @@ if __name__ == "__main__":
 
     logger.info("optimization results:")
     logger.info(f"best parameters (x) : {best_x}")
-    logger.info(f"predicted min (obj) : {sl.c}{pred_y_min:.6f}{sl.q}")
-    logger.info(f"verified min (obj)  : {sl.g}{true_y_min:.6f}{sl.q}")
+    logger.info(f"predicted min (obj) : {hue.c}{pred_y_min:.6f}{hue.q}")
+    logger.info(f"verified min (obj)  : {hue.g}{true_y_min:.6f}{hue.q}")
     logger.info(f"full output vector  : {true_y_vector}")
-    logger.info(f"{sl.b}process completed successfully.{sl.q}")
+    logger.info(f"{hue.b}process completed successfully.{hue.q}")

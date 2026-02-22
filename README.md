@@ -1,82 +1,149 @@
-# wsnet: A Deep Learning Library for Engineering Surrogate Modeling
+# WSNet: A Deep Learning Library for Engineering Surrogate Modeling
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/get-started/locally/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**wsnet** is an integrated deep learning library specifically designed for **high-fidelity surrogate modeling in engineering applications**. It contains both **classical response surface algorithms**, **standard deep learning algorithms** and **modern neural operator algorithms**, providing a unified pipeline for **fluid dynamics emulation**, **structural analysis**, and **design optimization**.
-
----
+**WSNet** is an integrated deep learning library specifically designed for **high-fidelity surrogate modeling in engineering applications**. It provides a unified pipeline for **fluid dynamics emulation**, **structural analysis**, and **design optimization** with comprehensive support for classical surrogate models, neural networks, and modern neural operator algorithms.
 
 ## 🏗 System Architecture
 
-The library is organized into three primary pillars, ensuring a clear separation between algorithms, utilities, and applications.
+WSNet features a completely reorganized architecture with clear separation of concerns:
 
-### 1. Algorithms (`nets/`)
-A modular repository of algorithms categorized by their mathematical formulation:
-* **`surfaces/`**: Classical response surface algorithms.
-    * Includes: **PRS** (Polynomial Response Surface), **RBF** (Radial Basis Function), **KRG** (Kriging), and **SVR** (Support Vector Regression).
-* **`baselines/`**: Standard deep learning algorithms.
-    * Includes: **MLP** (Multi-Layer Perceptron).
-* **`operators/`**: Modern neural operator algorithms.
-    * Includes: **DeepONet** (Deep Operator Network), **GeoFNO** (Geometry-aware Fourier Neural Operator).
+```
+wsnet/
+├── models/        # Surrogate models (classical, neural, multi-fidelity, ensemble)
+├── training/      # Training frameworks and utilities
+├── data/          # Data loading and preprocessing
+├── sampling/      # Design of Experiments and infill strategies
+└── utils/         # Core utilities
+```
 
-### 2. Utilities (`utils/`)
-Production-grade utilities tailored for physical datasets:
-* **`DoE`**: Implementation of **LHS** (Latin Hypercube Sampling) with Maximin distance optimization for maximum information gain in parameter Design of Experimnets.
-* **`Engine`**: Fully encapsulated **training pipeline** serving as a "One-Stop" solution for DL workflows. It features:
-    * **TensorScaler**: Channel-wise normalization tailored for multi-physics fields.
-    * **AutoregressiveTrainer**: Trainer specialized for sequence rollout with **pushforward logic** and **noise injection** to ensure long-term spatio-temporal stability.
-* **`CFDParser`**: Automated **data ETL (Extract, Transform and Load) pipeline** for **ANSYS Fluent** exports. It handles raw `.txt` exports, supports spatial/temporal subsampling, and implements high-speed `.pt` caching.
-* **`CFDRender`**: Automated **visualization pipeline** for CFD results, generating side-by-side animations of Ground Truth, Prediction, and Absolute Error.
+### 1. Models (`models/`)
+A modular repository of surrogate models categorized by their mathematical formulation:
 
-### 3. Applications (`apps/`)
-End-to-end research workflows demonstrating the application of `wsnet` to complex physical domains. These applications provide best practices for integrating datasets, models, and trainers to solve production-level problems.
+* **`classical/`**: Classical response surface algorithms
+    * Includes: **PRS** (Polynomial Response Surface), **RBF** (Radial Basis Function), **KRG** (Kriging), **SVR** (Support Vector Regression)
+* **`neural/`**: Neural network models
+    * Includes: **MLP** (Multi-Layer Perceptron), **DeepONet**, **GeoFNO** (Geometry-aware Fourier Neural Operator), **U-WNO** (Universal Window-based Neural Operator)
+* **`multi_fidelity/`**: Multi-fidelity models
+    * Includes: **CCA-MFS**, **MFS-MLS**, **MMFS**
+* **`ensemble/`**: Ensemble models
+    * Includes: **T-AHS**, **AES-MSI**
 
-* **`HyperFlow-Net` (Fluid Dynamics Emulation)**: 
-    * **Application**: Real-time emulation of hydrogen energy pipelines driven by extreme high-pressure differentials.
-    * **Methodology**: Utilizes **GeoFNO** for mesh-independent mapping to capture non-linear shock wave propagation and rapid pressure transients in complex piping topologies.
-* **`FId-Net` (Structural Analysis & Inverse Problems)**: 
-    * **Application**: Force Identification (FId) for plate structures.
-    * **Methodology**: A deep learning approach for solving **Inverse Problems**. It processes multi-sensor vibration/strain data to reconstruct the magnitude and spatial coordinates of external impact loads with high precision.
-* **`AeroOpt-Solver` (Aerospace Design Optimization)**: 
-    * **Application**: High-fidelity aerodynamic design optimization for aerospace components.
-    * **Methodology**: Leverages **wsnet**'s surrogate models (KRG/RBF) and DoE utilities to accelerate the optimization loop, significantly reducing the computational cost compared to traditional CFD-based adjoint methods.
+### 2. Training (`training/`)
+Training frameworks and utilities:
 
----
+* **`base_trainer.py`**: Base trainer class for custom training workflows
+* **`std_trainer.py`**: Standard trainer for static regression tasks
+* **`rollout_trainer.py`**: Trainer for autoregressive sequence prediction
+* **`base_criterion.py`**: Base loss functions
+* **`physics_criterion.py`**: Physics-informed training support
+
+### 3. Data (`data/`)
+Data loading and preprocessing utilities:
+
+* **`flow_data.py`**: CFD data loading and preprocessing
+* **`scaler.py`**: Data scaling utilities
+* **`CFDRender.py`**: CFD visualization and rendering
+* **`flow_vis.py`**: Flow field visualization tools
+
+### 4. Sampling (`sampling/`)
+Design of Experiments and infill strategies:
+
+* **`doe.py`**: Design of Experiments (LHS, optimized LHS)
+* **`infill.py`**: Infill sampling strategies
+* **`mico_infill.py`**: MICO infill strategy for multi-fidelity optimization
+
+### 5. Utilities (`utils/`)
+Core utilities and helper functions.
 
 ## 🚀 Key Features
 
-* **CFD-Ready Pipeline**: Direct ingestion of Fluent data with automatic coordinate and field mapping (Vx, Vy, Vz, P, T).
-* **Physics-Inspired Training**: The engine supports **Curriculum Learning** for rollout steps, allowing models to learn short-term dynamics before tackling long-term trajectories.
-* **Optimization-Driven DoE**: Generate space-filling designs using optimized LHS to maximize information gain in the parameter space.
-* **Quality Inspection**: Integrated rendering tools to monitor model performance across multiple physical fields simultaneously.
+* **CFD-Ready Pipeline**: Direct ingestion of ANSYS Fluent data with automatic coordinate and field mapping
+* **Physics-Informed Training**: Support for physics constraints and loss functions
+* **Multi-Fidelity Support**: Comprehensive multi-fidelity modeling capabilities
+* **Ensemble Methods**: Advanced ensemble techniques for improved accuracy
+* **Neural Operator Algorithms**: Modern neural operator implementations for complex physics
+* **Comprehensive Visualization Tools**: Built-in CFD visualization and rendering
+* **Standardized API**: Consistent "initialize, fit, predict" pattern across all models
 
----
+## 📚 API Reference
 
-## 🛠 Quick Start
+### Core Classes
 
-### Data Preparation
-Place your ANSYS Fluent `.txt` exports in the `dataset/` folder following the `case_0001/` naming convention.
+- `wsnet.models.base.Model`: Base model interface
+- `wsnet.training.base_trainer.Trainer`: Base trainer interface
+- `wsnet.data.flow_data.FlowData`: CFD data loader
+- `wsnet.sampling.doe.lhs_design`: Optimized Latin Hypercube Sampling
 
-### Training an Autoregressive Model
+### Common Patterns
+
+The library follows a consistent "initialize, fit, predict" pattern:
+
 ```python
-import torch
-from wsnet.utils.CFDParser import CFDataset
-from wsnet.utils.Engine import AutoregressiveTrainer
-from wsnet.nets.operators.GeoFNO import GeoFNO # Example
+# Initialize
+model = SomeModel(parameters)
 
-# 1. Load Data
-train_data, val_data, _ = CFDataset.build_datasets(data_dir='./dataset', spatial_dim=2)
+# Fit/Train
+trainer = SomeTrainer(model=model)
+trainer.fit(train_data, val_data)
 
-# 2. Initialize Model & Trainer
-model = GeoFNO(...)
-trainer = AutoregressiveTrainer(
-    model=model,
-    output_dir='./runs'
-    pushforward_steps=5, 
-    noise_std=0.005,
-)
+# Predict
+predictions = model.predict(test_data)
+```
 
-# 3. Fit
-trainer.fit(train_loader, val_loader)
+## 🚀 Examples and Tutorials
+
+Check the `examples/` directory for complete workflow examples:
+
+- Basic regression example
+- CFD emulation example
+- Multi-fidelity modeling example
+- Ensemble modeling example
+- Sequential sampling modeling example
+
+## ⚙️ Installation and Dependencies
+
+### Requirements
+
+- Python 3.8+
+- PyTorch 1.10+
+- NumPy
+- SciPy
+- Matplotlib
+- PiVista
+- tqdm
+
+### Installation
+
+```bash
+git clone https://github.com/SN-WANG/wsnet.git
+cd wsnet
+pip install -e .
+```
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 📞 Contact
+
+For questions and support, please contact:
+- Shengning Wang (王晟宁) - snwang2023@163.com
+- Project Website: [https://github.com/SN-WANG/wsnet](https://github.com/SN-WANG/wsnet)
+
+## 📖 Citation
+
+If you use WSNet in your research, please cite:
+
+```
+@software{wsnet2026,
+  author = {Shengning Wang},
+  title = {WSNet: A Deep Learning Library for Engineering Surrogate Modeling},
+  year = {2026},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  howpublished = {\url{https://github.com/SN-WANG/wsnet}}
+}
+```

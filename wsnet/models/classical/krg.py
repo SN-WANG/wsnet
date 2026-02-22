@@ -6,7 +6,7 @@ from scipy.linalg import cholesky, solve_triangular, qr
 from scipy.optimize import minimize, Bounds
 from typing import Dict, Any, Tuple, Union, Optional, Callable
 
-from wsnet.utils.scaler import StandardScalerNP
+from wsnet.data.scaler import StandardScalerNP
 
 
 class KRG:

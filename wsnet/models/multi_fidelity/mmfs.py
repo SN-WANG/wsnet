@@ -8,8 +8,8 @@ from scipy.linalg import pinv
 from scipy.optimize import minimize_scalar
 from typing import Dict, Tuple, Optional, List
 
-from wsnet.nets.surfaces.rbf import RBF
-from wsnet.utils.scaler import StandardScalerNP
+from wsnet.models.classical.rbf import RBF
+from wsnet.data.scaler import StandardScalerNP
 
 
 class MMFS:

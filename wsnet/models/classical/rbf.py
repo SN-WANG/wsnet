@@ -4,7 +4,7 @@
 import numpy as np
 from typing import Optional
 
-from wsnet.utils.scaler import StandardScalerNP
+from wsnet.data.scaler import StandardScalerNP
 
 
 class RBF:

@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 from typing import List, Dict, Optional, Union, Tuple
 
-from wsnet.utils.engine import sl, logger
+from wsnet.utils.hue_logger import hue, logger
 
 
 class FlowData(Dataset):
@@ -49,7 +49,7 @@ class FlowData(Dataset):
         self.seqs: List[Tensor] = []
         self.coords: List[Tensor] = []
 
-        logger.info(f"initializing dataset with {sl.m}{len(case_names)}{sl.q} cases...")
+        logger.info(f"initializing dataset with {hue.m}{len(case_names)}{hue.q} cases...")
 
         for name in tqdm(self.case_names, desc="[FlowData] data loading", leave=False, dynamic_ncols=True):
             cache_path = self.data_dir / f"{name}.pt"
@@ -70,10 +70,10 @@ class FlowData(Dataset):
                 self.seqs.append(states_tensor)
                 self.coords.append(coords_tensor)
 
-        logger.info(f"{sl.g}dataset initialized.{sl.q} cases: {sl.m}{len(self.seqs)}{sl.q}, "
-                    f"frames: {sl.m}{self.seqs[0].shape[0]}{sl.q}, "
-                    f"nodes: {sl.m}{self.seqs[0].shape[1]}{sl.q}, "
-                    f"channels: {sl.m}{self.seqs[0].shape[2]}{sl.q}")
+        logger.info(f"{hue.g}dataset initialized.{hue.q} cases: {hue.m}{len(self.seqs)}{hue.q}, "
+                    f"frames: {hue.m}{self.seqs[0].shape[0]}{hue.q}, "
+                    f"nodes: {hue.m}{self.seqs[0].shape[1]}{hue.q}, "
+                    f"channels: {hue.m}{self.seqs[0].shape[2]}{hue.q}")
 
     def __len__(self) -> int:
         return len(self.seqs)
@@ -139,12 +139,12 @@ class FlowData(Dataset):
         curr_t, curr_n, _ = states.shape
 
         if curr_t > max_t:
-            logger.info(f'subsampling sequence length to {sl.m}{max_t}{sl.q}...')
+            logger.info(f'subsampling sequence length to {hue.m}{max_t}{hue.q}...')
             indices = torch.linspace(0, curr_t - 1, max_t).long()
             states = torch.index_select(states, 0, indices)
 
         if curr_n > max_n:
-            logger.info(f'subsampling nodes number to {sl.m}{max_n}{sl.q}...')
+            logger.info(f'subsampling nodes number to {hue.m}{max_n}{hue.q}...')
             indices = torch.linspace(0, curr_n - 1, max_n).long()
             states = torch.index_select(states, 1, indices)
             coords = torch.index_select(coords, 0, indices)
@@ -184,7 +184,7 @@ class FlowData(Dataset):
         new_seqs: List[Tensor] = []
         new_coords: List[Tensor] = []
 
-        logger.info(f"augmenting dataset with {sl.m}{len(dataset)}{sl.q} cases...")
+        logger.info(f"augmenting dataset with {hue.m}{len(dataset)}{hue.q} cases...")
 
         pbar = tqdm(zip(dataset.seqs, dataset.coords), total=len(dataset),
                     desc=f"[FlowData] data augmenting", leave=False, dynamic_ncols=True)
@@ -209,10 +209,10 @@ class FlowData(Dataset):
         dataset.seqs = list(dataset.seqs)
         dataset.coords = list(dataset.coords)
 
-        logger.info(f"{sl.g}data augmented.{sl.q} cases: {sl.m}{len(dataset)}{sl.q}, "
-                    f"frames: {sl.m}{dataset.seqs[0].shape[0]}{sl.q}, "
-                    f"nodes: {sl.m}{dataset.seqs[0].shape[1]}{sl.q}, "
-                    f"channels: {sl.m}{dataset.seqs[0].shape[2]}{sl.q}")
+        logger.info(f"{hue.g}data augmented.{hue.q} cases: {hue.m}{len(dataset)}{hue.q}, "
+                    f"frames: {hue.m}{dataset.seqs[0].shape[0]}{hue.q}, "
+                    f"nodes: {hue.m}{dataset.seqs[0].shape[1]}{hue.q}, "
+                    f"channels: {hue.m}{dataset.seqs[0].shape[2]}{hue.q}")
 
     @staticmethod
     def spawn(data_dir: Union[str, Path] = "./dataset", split_counts: Tuple[int, int] = (4, 1),

@@ -5,7 +5,7 @@ import numpy as np
 from typing import Optional
 from itertools import combinations_with_replacement
 
-from wsnet.utils.scaler import StandardScalerNP
+from wsnet.data.scaler import StandardScalerNP
 
 
 class PRS:

@@ -9,76 +9,30 @@ import argparse
 from pathlib import Path
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
-from typing import List, Dict, Tuple
+from typing import Dict, Tuple
 
-import args
+import flow_args
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path: sys.path.insert(0, project_root)
 
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
 
-from wsnet.nets.operators.geofno import GeoFNO
-from wsnet.utils.flow_data import FlowData
-from wsnet.utils.CFDRender import CFDAnimation
-from wsnet.utils.engine import (
-    sl, logger, seed_everything, compute_ar_metrics, TensorScaler, AutoregressiveTrainer
-)
+from wsnet.models.neural.geofno import GeoFNO
+
+from wsnet.data.flow_data import FlowData
+from wsnet.data.CFDRender import CFDAnimation
+from wsnet.data.scaler import StandardScalerTensor, MinMaxScalerTensor
+
+from wsnet.training.rollout_trainer import RolloutTrainer
+from wsnet.training.base_criterion import Metrics
+
+from wsnet.utils.seeder import seed_everything
+from wsnet.utils.hue_logger import hue, logger
 
 
 # ======================================================================
-# 1. Dataset Wrapper with Normalization
+# 1. Dataset Wrapper with Scalers
 # ======================================================================
-
-class CoordinateScaler:
-    """
-    Manages coordinate normalization (MinMax Scaling to [-1, 1]).
-    Follows the state_dict interface for unified checkpointing.
-    """
-    def __init__(self, spatial_dim: int):
-        self.spatial_dim = spatial_dim
-        self.mins = torch.full((spatial_dim,), float('inf'))
-        self.maxs = torch.full((spatial_dim,), float('-inf'))
-        self._is_fitted = False
-
-    def fit(self, coords_list: List[Tensor]) -> 'CoordinateScaler':
-        """
-        Computes global min/max from a list of coordinate tensors.
-
-        Args:
-            coords_list: List of tensors, each shape (num_nodes, spatial_dim).
-        """
-        for c in coords_list:
-            self.mins = torch.minimum(self.mins, c.min(dim=0)[0])
-            self.maxs = torch.maximum(self.maxs, c.max(dim=0)[0])
-
-        diff = self.maxs - self.mins
-        diff[diff < 1e-7] = 1.0
-        self.maxs = self.mins + diff
-
-        self._is_fitted = True
-        return self
-
-    def transform(self, coords: Tensor) -> Tensor:
-        """
-        Normalizes coordinates to [-1, 1].
-        """
-        if not self._is_fitted:
-            raise RuntimeError('CoordinateScaler must be fitted before transform.')
-
-        self.mins = self.mins.to(coords.device)
-        self.maxs = self.maxs.to(coords.device)
-
-        return 2.0 * (coords - self.mins) / (self.maxs - self.mins) - 1.0
-
-    def state_dict(self) -> Dict[str, Tensor]:
-        return {"mins": self.mins, "maxs": self.maxs}
-
-    def load_state_dict(self, state_dict: Dict[str, Tensor]):
-        self.mins = state_dict["mins"]
-        self.maxs = state_dict["maxs"]
-        self._is_fitted = True
-
 
 class ScaledCFDataset(Dataset):
     """
@@ -86,16 +40,20 @@ class ScaledCFDataset(Dataset):
 
     attributes:
         dataset (FlowData): The underlying raw dataset.
-        scaler (TensorScaler): fitted scaler for feature standardization.
+        scaler (StandardScalerTensor): fitted scaler for feature standardization.
         mins (Tensor): Minimum coordinate values. Shape (spatial_dim,).
         maxs (Tensor): Maximum coordinate values. Shape (spatial_dim,).
     """
-    def __init__(self, dataset: FlowData, feature_scaler: TensorScaler, coord_scaler: CoordinateScaler):
+    def __init__(
+            self, dataset: FlowData,
+            feature_scaler: StandardScalerTensor,
+            coord_scaler: MinMaxScalerTensor
+        ):
         """
         Args:
             dataset: Instance of FlowData.
-            feature_scaler: Fitted TensorScaler instance.
-            coord_scaler: Fitted CoordinateScaler instance.
+            feature_scaler: Fitted StandardScalerTensor instance.
+            coord_scaler: Fitted MinMaxScalerTensor instance.
         """
         self.dataset = dataset
         self.feature_scaler = feature_scaler
@@ -149,8 +107,9 @@ def train_pipeline(args: argparse.Namespace) -> None:
     )
 
     train_seq = torch.cat(train_raw.seqs, dim=0)
-    feature_scaler = TensorScaler().fit(train_seq, feature_dim=-1)
-    coord_scaler = CoordinateScaler(args.spatial_dim).fit(train_raw.coords)
+    train_coord = torch.cat(train_raw.coords, dim=0)
+    feature_scaler = StandardScalerTensor().fit(train_seq, channel_dim=-1)
+    coord_scaler = MinMaxScalerTensor(norm_range="bipolar").fit(train_coord, channel_dim=-1)
 
     train_dataset = ScaledCFDataset(train_raw, feature_scaler, coord_scaler)
     val_dataset = ScaledCFDataset(val_raw, feature_scaler, coord_scaler)
@@ -167,16 +126,16 @@ def train_pipeline(args: argparse.Namespace) -> None:
                    deformation_kwargs={'num_layers': args.deform_layers, 'hidden_dim': args.deform_hidden})
 
     num_params = sum(p.numel() for p in model.parameters())
-    logger.info(f"model has {sl.m}{num_params}{sl.q} parameters")
+    logger.info(f"model has {hue.m}{num_params}{hue.q} parameters")
 
     # --- 3. Training Execution ---
     scalers={"feature_scaler": feature_scaler, "coord_scaler": coord_scaler}
 
-    trainer = AutoregressiveTrainer(model=model, lr=args.lr, max_epochs=args.max_epochs,
-                                    scalers=scalers, output_dir=output_dir, device=args.device,
-                                    weight_decay=args.weight_decay, eta_min=args.eta_min,
-                                    max_rollout_steps=args.max_rollout_steps, rollout_patience=args.rollout_patience,
-                                    noise_std_init=args.noise_std_init, noise_decay=args.noise_decay)
+    trainer = RolloutTrainer(model=model, lr=args.lr, max_epochs=args.max_epochs,
+                             scalers=scalers, output_dir=output_dir, device=args.device,
+                             weight_decay=args.weight_decay, eta_min=args.eta_min,
+                             max_rollout_steps=args.max_rollout_steps, rollout_patience=args.rollout_patience,
+                             noise_std_init=args.noise_std_init, noise_decay=args.noise_decay)
 
     trainer.fit(train_loader, val_loader)
 
@@ -205,9 +164,9 @@ def inference_pipeline(args: argparse.Namespace) -> None:
     logger.info("loading training artifacts...")
     checkpoint = torch.load(model_path, map_location=device)
 
-    feature_scaler = TensorScaler()
+    feature_scaler = StandardScalerTensor()
     feature_scaler.load_state_dict(checkpoint["scaler_state_dict"]["feature_scaler"])
-    coord_scaler = CoordinateScaler(args.spatial_dim)
+    coord_scaler = MinMaxScalerTensor(norm_range="bipolar")
     coord_scaler.load_state_dict(checkpoint["scaler_state_dict"]["coord_scaler"])
 
     # --- 2. Data Preparation ---
@@ -224,14 +183,14 @@ def inference_pipeline(args: argparse.Namespace) -> None:
                    deformation_kwargs={'num_layers': args.deform_layers, 'hidden_dim': args.deform_hidden})
 
     num_params = sum(p.numel() for p in model.parameters())
-    logger.info(f"Model has {sl.m}{num_params}{sl.q} parameters")
+    logger.info(f"Model has {hue.m}{num_params}{hue.q} parameters")
 
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
     model.eval()
 
     # --- 4. Inference and Analysis ---
-    logger.info(f'{sl.g}running inference on test set...{sl.q}')
+    logger.info(f'{hue.g}running inference on test set...{hue.q}')
     visualizer = CFDAnimation(output_dir=run_dir, spatial_dim=args.spatial_dim)
 
     case_metrics: Dict[str, Dict[str, Dict[str, float]]] = {}
@@ -252,23 +211,24 @@ def inference_pipeline(args: argparse.Namespace) -> None:
             coords_raw = test_raw.coords[i].cpu()
 
             # compute metrics
-            metrics = compute_ar_metrics(gt_seq, pred_seq, channel_names=args.channel_names)
+            metrics_evaluator = Metrics(channel_names=args.channel_names)
+            metrics = metrics_evaluator.compute(pred_seq, gt_seq)
             case_metrics[case_name] = metrics
 
             log_metrics = []
             for ch in args.channel_names:
-                nmse = metrics[ch]["NMSE"]
-                r2 = metrics[ch]["R2"]
-                log_metrics.append(f"{sl.c}{ch}:{sl.q} NMSE={sl.m}{nmse:.2e}{sl.q}, R2={sl.m}{r2:.4f}{sl.q}")
+                nmse = metrics[ch]["global"]["nmse"]
+                r2 = metrics[ch]["global"]["r2"]
+                log_metrics.append(f"{hue.c}{ch}:{hue.q} NMSE={hue.m}{nmse:.2e}{hue.q}, R2={hue.m}{r2:.4f}{hue.q}")
 
-            logger.info(f"case {sl.b}{case_name}{sl.q} | " + " | ".join(log_metrics))
+            logger.info(f"case {hue.b}{case_name}{hue.q} | " + " | ".join(log_metrics))
 
             # save predictions
             torch.save(pred_seq, run_dir / f"{case_name}_pred.pt")
 
             # visualize
             if i == 0:
-                logger.info(f"rendering animation for case: {sl.b}{case_name}{sl.q}")
+                logger.info(f"rendering animation for case: {hue.b}{case_name}{hue.q}")
                 visualizer.animate_comparison(
                     gt=gt_seq, pred=pred_seq, coords=coords_raw, case_name=case_name)
 
@@ -276,7 +236,7 @@ def inference_pipeline(args: argparse.Namespace) -> None:
     with open(run_dir / "test_metrics.json", "w") as f:
         json.dump(case_metrics, f, indent=4)
 
-    logger.info(f"{sl.g}inference completed.{sl.q}")
+    logger.info(f"{hue.g}inference completed.{hue.q}")
 
 
 # ======================================================================
@@ -284,7 +244,7 @@ def inference_pipeline(args: argparse.Namespace) -> None:
 # ======================================================================
 
 if __name__ == "__main__":
-    args = args.get_args()
+    args = flow_args.get_args()
 
     if "train" in args.mode: train_pipeline(args)
 

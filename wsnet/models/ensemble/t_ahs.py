@@ -6,10 +6,10 @@
 import numpy as np
 from typing import Dict, List, Optional
 
-from wsnet.nets.surfaces.prs import PRS
-from wsnet.nets.surfaces.rbf import RBF
-from wsnet.nets.surfaces.krg import KRG
-from wsnet.nets.surfaces.svr import SVR
+from wsnet.models.classical.prs import PRS
+from wsnet.models.classical.rbf import RBF
+from wsnet.models.classical.krg import KRG
+from wsnet.models.classical.svr import SVR
 
 
 class TAHS:

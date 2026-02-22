@@ -7,7 +7,7 @@ from scipy.stats import norm
 from scipy.optimize import minimize, Bounds
 from typing import Union, List
 
-from wsnet.nets.surfaces.krg import KRG
+from wsnet.models.classical.krg import KRG
 
 
 class Infill:
