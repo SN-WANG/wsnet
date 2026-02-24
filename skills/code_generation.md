@@ -1,6 +1,6 @@
 ---
-name: dl_code_generation
-description: Generate production-ready deep learning code in PyTorch/TensorFlow from natural language requirements, adhering to industrial coding standards with comprehensive type annotations, documentation, and engineering best practices.
+name: code_generation
+description: Generate production-ready deep learning code from natural language.
 tags: ["deep-learning", "python", "code-generation", "pytorch", "tensorflow", "machine-learning", "neural-networks"]
 version: "1.0.0"
 author: "Shengning Wang"
@@ -294,7 +294,7 @@ IF user requests numerical verification OR complex tensor operations:
     2. Verify mathematical correctness
     3. Test edge cases
     4. Benchmark performance
-  
+
   Example:
   "Let me verify the attention mechanism shape transformations..."
   [Use python_interpreter to test]

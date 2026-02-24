@@ -2,7 +2,6 @@
 # Multi-fidelity sensor placement for digital twins
 
 import numpy as np
-from scipy.spatial.distance import cdist
 from typing import Optional, List
 
 from wsnet.models.classical.krg import KRG
@@ -149,6 +148,41 @@ class MICOInfill:
         # Initialize distance scaler
         self.scaler_dist = MinMaxScalerNP(feature_range="unit")
 
+    # ------------------------------------------------------------------
+
+    def _compute_dists(self, x: np.ndarray, c: np.ndarray) -> np.ndarray:
+        """
+        Compute pairwise squared Euclidean distances between two point sets.
+
+        Uses the algebraic expansion: ||x - c||^2 = ||x||^2 + ||c||^2 - 2 * x @ c^T
+        for vectorized computation without explicit loops.
+
+        Args:
+            x (np.ndarray): Query points of shape (num_queries, num_features), dtype: float64.
+            c (np.ndarray): Reference points of shape (num_refs, num_features), dtype: float64.
+
+        Returns:
+            np.ndarray: Squared distance matrix of shape (num_queries, num_refs), dtype: float64.
+                Entry (i, j) contains the squared Euclidean distance between x[i] and c[j].
+        """
+        # Compute squared L2 norms for each point set: (num_queries, 1) and (num_refs,)
+        x_norm_sq = np.sum(x ** 2, axis=1, keepdims=True)  # Shape: (num_queries, 1)
+        c_norm_sq = np.sum(c ** 2, axis=1)                 # Shape: (num_refs,)
+
+        # Compute cross term: 2 * x @ c^T, shape: (num_queries, num_refs)
+        cross_term = 2.0 * (x @ c.T)
+
+        # Combine: ||x||^2 + ||c||^2 - 2 * x @ c^T
+        # Broadcasting: (num_queries, 1) + (num_refs,) -> (num_queries, num_refs)
+        dists_sq = x_norm_sq + c_norm_sq - cross_term
+
+        # Numerical stability: clamp small negative values to zero (floating point errors)
+        np.maximum(dists_sq, 0.0, out=dists_sq)
+
+        return dists_sq
+
+    # ------------------------------------------------------------------
+
     def _initialize_theta(self, theta: Optional[np.ndarray]) -> np.ndarray:
         """
         Initialize correlation length parameters.
@@ -172,6 +206,8 @@ class MICOInfill:
 
         # Default fallback
         return np.ones(self.input_dim, dtype=np.float64)
+
+    # ------------------------------------------------------------------
 
     def _estimate_rho(self) -> np.ndarray:
         """
@@ -197,6 +233,8 @@ class MICOInfill:
 
         return rho
 
+    # ------------------------------------------------------------------
+
     def _estimate_sigma_sq_v(self) -> np.ndarray:
         """
         Estimate LF variance from KRG model.
@@ -213,6 +251,8 @@ class MICOInfill:
 
         # Estimate from data variance
         return np.var(self.y_lf, axis=0).astype(np.float64)
+
+    # ------------------------------------------------------------------
 
     def _estimate_sigma_sq_d(self) -> np.ndarray:
         """
@@ -232,6 +272,8 @@ class MICOInfill:
 
         return sigma_sq_d
 
+    # ------------------------------------------------------------------
+
     def _map_hf_to_lf(self) -> np.ndarray:
         """
         Map initial HF locations to nearest LF candidate indices.
@@ -241,12 +283,14 @@ class MICOInfill:
                 shape (num_hf_init,), dtype int64.
         """
         # Compute pairwise distances between HF and LF
-        dists = cdist(self.x_hf, self.x_lf, metric='euclidean')  # (num_hf, num_lf)
+        dists = self._compute_dists(self.x_hf, self.x_lf)  # (num_hf, num_lf)
 
         # Find nearest neighbor
         hf_indices = np.argmin(dists, axis=1)  # (num_hf,)
 
         return hf_indices.astype(np.int64)
+
+    # ------------------------------------------------------------------
 
     def _compute_correlation_matrix(
         self, 
@@ -282,6 +326,8 @@ class MICOInfill:
 
         return np.exp(-dists_sq)
 
+    # ------------------------------------------------------------------
+
     def _compute_multi_fidelity_covariance(
         self,
         x1: np.ndarray,
@@ -309,6 +355,8 @@ class MICOInfill:
         psi_d = self._compute_correlation_matrix(x1, x2, self.theta_d)
 
         return (rho_d**2 * sigma_v) * psi_v + sigma_d * psi_d
+
+    # ------------------------------------------------------------------
 
     def _select_for_single_output(
         self,
@@ -365,7 +413,7 @@ class MICOInfill:
 
             # Compute distances from candidates to selected set
             # dists[i] = min_j ||x_candidates[i] - x_selected[j]||
-            dists_all = cdist(x_candidates, x_selected, metric='euclidean')  # (num_cand, num_sel)
+            dists_all = self._compute_dists(x_candidates, x_selected)  # (num_cand, num_sel)
             dists = np.min(dists_all, axis=1)  # (num_cand,)
 
             # Normalize distances using MinMaxScalerNP
@@ -458,6 +506,8 @@ class MICOInfill:
 
         return np.array(selected, dtype=np.int64)
 
+    # ------------------------------------------------------------------
+
     def _aggregate_selections(
         self,
         selections_per_output: List[np.ndarray]
@@ -503,16 +553,14 @@ class MICOInfill:
         # Greedy furthest-point sampling for diverse selection
         centroids = [unique_positions[0]]
         for _ in range(1, self.num_select):
-            dists_to_centroids = cdist(
-                coords, 
-                self.x_lf[np.array(centroids)], 
-                metric='euclidean'
-            )
+            dists_to_centroids = self._compute_dists(coords, self.x_lf[np.array(centroids)])
             min_dists = np.min(dists_to_centroids, axis=1)
             next_idx = int(np.argmax(min_dists))
             centroids.append(unique_positions[next_idx])
 
         return np.array(centroids, dtype=np.int64)
+
+    # ------------------------------------------------------------------
 
     def propose(self) -> np.ndarray:
         """
@@ -535,6 +583,8 @@ class MICOInfill:
         final_selection = self._aggregate_selections(selections)
 
         return final_selection
+
+    # ------------------------------------------------------------------
 
     def evaluate(self, indices: np.ndarray) -> np.ndarray:
         """
@@ -601,38 +651,3 @@ class MICOInfill:
             results[:, d] = delta_n * delta_d
 
         return results
-
-
-def create_mico_infill(
-    model: KRG,
-    x_lf: np.ndarray,
-    y_lf: np.ndarray,
-    x_hf: np.ndarray,
-    y_hf: np.ndarray,
-    num_select: int,
-    **kwargs
-) -> MICOInfill:
-    """
-    Factory function to create MICOInfill instance.
-
-    Args:
-        model: Pre-trained KRG model on LF data.
-        x_lf: LF candidate locations, shape (num_lf, input_dim).
-        y_lf: LF responses, shape (num_lf, target_dim).
-        x_hf: Initial HF locations, shape (num_hf_init, input_dim).
-        y_hf: HF measurements, shape (num_hf_init, target_dim).
-        num_select: Total sensors to select.
-        **kwargs: Additional arguments passed to MICOInfill.
-
-    Returns:
-        MICOInfill: Configured MICO infill instance.
-    """
-    return MICOInfill(
-        model=model,
-        x_lf=x_lf,
-        y_lf=y_lf,
-        x_hf=x_hf,
-        y_hf=y_hf,
-        num_select=num_select,
-        **kwargs
-    )

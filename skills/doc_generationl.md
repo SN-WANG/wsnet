@@ -1,6 +1,6 @@
 ---
-name: tech_doc_generation
-description: Transform multimodal inputs (research papers, code repositories, natural language descriptions) into structured, publication-quality technical documentation for deep learning algorithms and systems.
+name: doc_generation
+description: Convert papers, code, or text descriptions into structured technical docs.
 tags: ["technical-writing", "documentation", "deep-learning", "research", "algorithms", "multimodal"]
 version: "1.0.0"
 author: "Shengning Wang"

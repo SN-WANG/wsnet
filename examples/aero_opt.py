@@ -5,6 +5,7 @@ import os
 import sys
 import numpy as np
 from scipy.optimize import differential_evolution
+from scipy.optimize import OptimizeResult
 
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -25,6 +26,9 @@ from wsnet.models.multi_fidelity.cca_mfs import CCAMFS
 
 # Sequential Sampling Methods
 from wsnet.sampling.infill import Infill
+
+# Optimization Methods
+from wsnet.models.optimization.dragonfly import dragonfly_optimize
 
 # Tools for machine learning experiments
 from wsnet.sampling.doe import lhs_design
@@ -349,11 +353,29 @@ if __name__ == "__main__":
     # bounds tuple for scipy
     scipy_bounds = [(bounds[i, 0], bounds[i, 1]) for i in range(num_features)]
 
-    # using differential evolution (robust global optimizer)
-    result = differential_evolution(
-        func=surrogate_objective, bounds=scipy_bounds, strategy="best1bin",
-        maxiter=50, popsize=10, tol=1e-6, seed=42
-    )
+    # choose optimizer: "de" (scipy differential_evolution) or "cfssda" (dragonfly)
+    optimizer_name = "cfssda"
+
+    if optimizer_name.lower() == "de":
+        # using differential evolution (robust global optimizer)
+        result: OptimizeResult = differential_evolution(
+            func=surrogate_objective, bounds=scipy_bounds, strategy="best1bin",
+            maxiter=50, popsize=10, tol=1e-6, seed=42
+        )
+    elif optimizer_name.lower() == "cfssda":
+        # using CFSSDA optimizer (robust population-based global optimizer)
+        result = dragonfly_optimize(
+            func=surrogate_objective,
+            bounds=scipy_bounds,
+            maxiter=120,
+            popsize=20,
+            tol=1e-6,
+            seed=42,
+            multi_objective=False,
+            scalarization="weighted_sum"
+        )
+    else:
+        raise ValueError(f"unknown optimizer_name: {optimizer_name}")
 
     best_x = result.x
     pred_y_min = result.fun
