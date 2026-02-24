@@ -26,6 +26,7 @@ from wsnet.models.multi_fidelity.cca_mfs import CCAMFS
 
 # Sequential Sampling Methods
 from wsnet.sampling.infill import Infill
+from wsnet.sampling.mico_infill import MICOInfill
 
 # Optimization Methods
 from wsnet.models.optimization.dragonfly import dragonfly_optimize
@@ -338,7 +339,46 @@ if __name__ == "__main__":
     evaluate_metrics(y_test, y_pred_krg, "KRG + Infill")
 
     # ------------------------------------------------------------------
-    # 9. Global Optimization on Surrogate Surface
+    # 9. Model G: KRG + MICOInfill (MICO Sequential Sampling)
+    # ------------------------------------------------------------------
+    logger.info(f"{hue.b}>>> Model G: KRG with MICOInfill{hue.q}")
+
+    # start from the 10 HF samples to demonstrate MICO's multi-fidelity advantage
+    x_mico = np.copy(x_hf)
+    y_mico = np.copy(y_hf)
+
+    model_krg_mico = KRG()
+    model_krg_mico.fit(x_mico, y_mico)
+
+    for i in range(num_infill):
+        mico_strategy = MICOInfill(
+            model=model_krg_mico,
+            x_hf=x_mico,
+            y_hf=y_mico,
+            x_lf=x_lf,
+            y_lf=y_lf,
+            target_index=target_index,
+            ratio=0.5,
+        )
+
+        x_new = mico_strategy.propose()  # shape (1, num_features)
+
+        y_new_val = AbaqusModel(fidelity="high").run(x_new.flatten())
+        y_new = y_new_val.reshape(1, -1)
+
+        if np.isnan(y_new).any():
+            logger.info(f"{hue.r}simulation failed (returned NaN). skipping update.{hue.q}")
+            continue
+
+        x_mico = np.vstack([x_mico, x_new])
+        y_mico = np.vstack([y_mico, y_new])
+        model_krg_mico.fit(x_mico, y_mico)
+
+    y_pred_krg_mico, _ = model_krg_mico.predict(x_test)
+    evaluate_metrics(y_test, y_pred_krg_mico, "KRG + MICOInfill")
+
+    # ------------------------------------------------------------------
+    # 10. Global Optimization on Surrogate Surface
     # ------------------------------------------------------------------
     logger.info(f"{hue.b}>>> Performing Global Optimization{hue.q}")
 
