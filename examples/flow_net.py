@@ -52,20 +52,20 @@ class ScaledCFDataset(Dataset):
         dataset:              The underlying raw dataset.
         feature_scaler:       Fitted StandardScalerTensor.
         coord_scaler:         Fitted MinMaxScalerTensor.
-        log_pressure:         Whether to apply log1p(p / LOG_P_REF) to the pressure channel.
+        use_log_pressure:     Whether to apply log1p(p / LOG_P_REF) to the pressure channel.
         pressure_channel_idx: Index of the pressure channel in the feature vector.
     """
     def __init__(
             self, dataset: FlowData,
             feature_scaler: StandardScalerTensor,
             coord_scaler: MinMaxScalerTensor,
-            log_pressure: bool = False,
+            use_log_pressure: bool = False,
             pressure_channel_idx: int = 2,
         ):
         self.dataset = dataset
         self.feature_scaler = feature_scaler
         self.coord_scaler = coord_scaler
-        self.log_pressure = log_pressure
+        self.use_log_pressure = use_log_pressure
         self.pressure_channel_idx = pressure_channel_idx
 
     def __len__(self) -> int:
@@ -75,19 +75,26 @@ class ScaledCFDataset(Dataset):
         seq, coords = self.dataset[idx]
 
         # 1. Log-pressure transform (before standardization)
-        if self.log_pressure:
+        if self.use_log_pressure:
             seq = seq.clone()
             seq[..., self.pressure_channel_idx] = torch.log1p(
                 seq[..., self.pressure_channel_idx] / LOG_P_REF
             )
 
         # 2. Feature standardization (Mean/Std)
-        seq_scaled = self.feature_scaler.transform(seq)
+        seq_std = self.feature_scaler.transform(seq)
 
         # 3. Coordinate normalization (Min/Max -> [-1, 1])
         coords_norm = self.coord_scaler.transform(coords)
 
-        return seq_scaled, coords_norm
+        return seq_std, coords_norm
+
+
+def _inverse_transform_pressure(seq: Tensor, p_idx: int) -> Tensor:
+    """Invert log1p(p / LOG_P_REF) -> physical pressure on a sequence tensor."""
+    seq = seq.clone()
+    seq[..., p_idx] = torch.expm1(seq[..., p_idx]) * LOG_P_REF
+    return seq
 
 
 # ======================================================================
@@ -97,16 +104,16 @@ class ScaledCFDataset(Dataset):
 def _build_model(args: argparse.Namespace) -> torch.nn.Module:
     """Instantiate the model selected by --model_type."""
     in_ch = out_ch = args.spatial_dim + 2  # [Vx, Vy, (Vz,) P, T]
-    deform_kw = {'num_layers': args.deform_layers, 'hidden_dim': args.deform_hidden}
+    deform_kw = {"num_layers": args.deform_layers, "hidden_dim": args.deform_hidden}
 
-    if args.model_type == 'geofno':
+    if args.model_type == "geofno":
         return GeoFNO(
             in_channels=in_ch, out_channels=out_ch,
             modes=args.modes, latent_grid_size=args.latent_grid_size,
             depth=args.depth, width=args.width,
             deformation_kwargs=deform_kw,
         )
-    elif args.model_type == 'geowno':
+    elif args.model_type == "geowno":
         return GeoWNO(
             in_channels=in_ch, out_channels=out_ch,
             modes=args.modes, latent_grid_size=args.latent_grid_size,
@@ -122,20 +129,13 @@ def _build_model(args: argparse.Namespace) -> torch.nn.Module:
         raise ValueError(f"Unknown model_type '{args.model_type}'. Choices: geofno, geowno")
 
 
-def _inverse_transform_pressure(seq: Tensor, p_idx: int) -> Tensor:
-    """Invert log1p(p / LOG_P_REF) -> physical pressure on a sequence tensor."""
-    seq = seq.clone()
-    seq[..., p_idx] = torch.expm1(seq[..., p_idx]) * LOG_P_REF
-    return seq
-
-
 # ======================================================================
 # 2. Training Pipeline
 # ======================================================================
 
 def train_pipeline(args: argparse.Namespace) -> None:
     """
-    Executes the training workflow: Data loading -> Normalization -> Model Init -> Training.
+    Executes the training workflow: Data loading -> Data Scaling -> Model Init ->  Model Training.
 
     Args:
         args (argparse.Namespace): Parsed command line arguments.
@@ -151,26 +151,16 @@ def train_pipeline(args: argparse.Namespace) -> None:
         win_len=args.win_len, win_stride=args.win_stride,
     )
 
-    # Pressure channel index: [Vx, Vy, P, T] in 2D → idx 2; [Vx, Vy, Vz, P, T] in 3D → idx 3
-    pressure_channel_idx: int = args.spatial_dim
-
-    # Fit scalers on (optionally log-transformed) training data
     train_seqs = torch.cat(train_raw.seqs, dim=0)
-    if args.use_log_pressure:
-        train_seqs = train_seqs.clone()
-        train_seqs[..., pressure_channel_idx] = torch.log1p(
-            train_seqs[..., pressure_channel_idx] / LOG_P_REF
-        )
-
-    train_coord = torch.cat(train_raw.coords, dim=0)
+    train_coords = torch.cat(train_raw.coords, dim=0)
     feature_scaler = StandardScalerTensor().fit(train_seqs, channel_dim=-1)
-    coord_scaler = MinMaxScalerTensor(norm_range="bipolar").fit(train_coord, channel_dim=-1)
+    coord_scaler = MinMaxScalerTensor(norm_range="bipolar").fit(train_coords, channel_dim=-1)
 
     dataset_kw = dict(
         feature_scaler=feature_scaler,
         coord_scaler=coord_scaler,
-        log_pressure=args.use_log_pressure,
-        pressure_channel_idx=pressure_channel_idx,
+        use_log_pressure=args.use_log_pressure,
+        pressure_channel_idx=args.spatial_dim,
     )
     train_dataset = ScaledCFDataset(train_raw, **dataset_kw)
     val_dataset = ScaledCFDataset(val_raw, **dataset_kw)
@@ -187,24 +177,25 @@ def train_pipeline(args: argparse.Namespace) -> None:
     num_params = sum(p.numel() for p in model.parameters())
     logger.info(f"model has {hue.m}{num_params}{hue.q} parameters")
 
-    # Physics grid size for FD loss (use latent_grid_size if physics loss enabled)
-    physics_grid_size = args.latent_grid_size if args.use_physics_loss else None
-
     # --- 3. Training Execution ---
     scalers = {"feature_scaler": feature_scaler, "coord_scaler": coord_scaler}
 
     trainer = RolloutTrainer(
+        # base params
         model=model, lr=args.lr, max_epochs=args.max_epochs,
         scalers=scalers, output_dir=output_dir, device=args.device,
+        # optimization params
         weight_decay=args.weight_decay, eta_min=args.eta_min,
+        # curriculum params
         max_rollout_steps=args.max_rollout_steps, rollout_patience=args.rollout_patience,
         noise_std_init=args.noise_std_init, noise_decay=args.noise_decay,
+        # physics params
         use_physics_loss=args.use_physics_loss,
-        lambda_phy=args.lambda_phy,
+        lambda_phyiscs=args.lambda_phyiscs,
         lambda_mass=args.lambda_mass,
         lambda_momentum=args.lambda_momentum,
         lambda_energy=args.lambda_energy,
-        physics_grid_size=physics_grid_size,
+        physics_grid_size=args.latent_grid_size,
     )
 
     trainer.fit(train_loader, val_loader)
@@ -237,8 +228,6 @@ def inference_pipeline(args: argparse.Namespace) -> None:
     coord_scaler = MinMaxScalerTensor(norm_range="bipolar")
     coord_scaler.load_state_dict(checkpoint["scaler_state_dict"]["coord_scaler"])
 
-    pressure_channel_idx: int = args.spatial_dim
-
     # --- 2. Data Preparation ---
     _, _, test_raw = FlowData.spawn(
         data_dir=args.data_dir, spatial_dim=args.spatial_dim,
@@ -247,7 +236,7 @@ def inference_pipeline(args: argparse.Namespace) -> None:
 
     test_dataset = ScaledCFDataset(
         test_raw, feature_scaler=feature_scaler, coord_scaler=coord_scaler,
-        log_pressure=args.use_log_pressure, pressure_channel_idx=pressure_channel_idx,
+        use_log_pressure=args.use_log_pressure, pressure_channel_idx=args.spatial_dim,
     )
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
@@ -265,31 +254,35 @@ def inference_pipeline(args: argparse.Namespace) -> None:
     logger.info(f'{hue.g}running inference on test set...{hue.q}')
     visualizer = FlowVis(output_dir=run_dir, spatial_dim=args.spatial_dim)
 
-    case_metrics: Dict[str, Dict[str, Dict[str, float]]] = {}
+    case_metrics: Dict[str, Dict[str, Dict[str, Dict[str, float]]]] = {}
 
     with torch.no_grad():
-        for i, (seq_scaled, coords_norm) in enumerate(test_loader):
-            seq_scaled = seq_scaled.to(device)
+        for i, (seq_std, coords_norm) in enumerate(test_loader):
+            seq_std = seq_std.to(device)
             coords_norm = coords_norm.to(device)
 
+            # ------------------------------------------------------------------
+
             case_name = test_raw.case_names[i]
-            steps = seq_scaled.shape[1] - 1
-            initial_state = seq_scaled[:, 0]
-
-            pred_seq_scaled = model.predict(initial_state, coords_norm, steps)
-
-            # Inverse-transform: unstandardize first
-            pred_seq = feature_scaler.inverse_transform(pred_seq_scaled).cpu().squeeze(0)
-            gt_seq = feature_scaler.inverse_transform(seq_scaled).cpu().squeeze(0)
-
-            # Invert log-pressure if applied
-            if args.use_log_pressure:
-                pred_seq = _inverse_transform_pressure(pred_seq, pressure_channel_idx)
-                gt_seq = _inverse_transform_pressure(gt_seq, pressure_channel_idx)
-
+            steps = seq_std.shape[1] - 1
+            initial_state = seq_std[:, 0]
             coords_raw = test_raw.coords[i].cpu()
 
-            # Compute metrics
+            # ------------------------------------------------------------------
+
+            pred_seq_std = model.predict(initial_state, coords_norm, steps)
+
+            # ------------------------------------------------------------------
+
+            pred_seq = feature_scaler.inverse_transform(pred_seq_std).cpu().squeeze(0)
+            gt_seq = feature_scaler.inverse_transform(seq_std).cpu().squeeze(0)
+
+            if args.use_log_pressure:
+                pred_seq = _inverse_transform_pressure(pred_seq, args.spatial_dim)
+                gt_seq = _inverse_transform_pressure(gt_seq, args.spatial_dim)
+
+            # ------------------------------------------------------------------
+
             metrics_evaluator = Metrics(channel_names=args.channel_names)
             metrics = metrics_evaluator.compute(pred_seq, gt_seq)
             case_metrics[case_name] = metrics
@@ -302,16 +295,18 @@ def inference_pipeline(args: argparse.Namespace) -> None:
 
             logger.info(f"case {hue.b}{case_name}{hue.q} | " + " | ".join(log_metrics))
 
-            # Save predictions
+            # ------------------------------------------------------------------
+
             torch.save(pred_seq, run_dir / f"{case_name}_pred.pt")
 
-            # Visualize first case
+            # ------------------------------------------------------------------
+
             if i == 0:
                 logger.info(f"rendering animation for case: {hue.b}{case_name}{hue.q}")
                 visualizer.animate_comparison(
                     gt=gt_seq, pred=pred_seq, coords=coords_raw, case_name=case_name)
 
-    # Save all metrics
+
     with open(run_dir / "test_metrics.json", "w") as f:
         json.dump(case_metrics, f, indent=4)
 
@@ -324,43 +319,67 @@ def inference_pipeline(args: argparse.Namespace) -> None:
 
 def probe_pipeline(args: argparse.Namespace) -> None:
     """
-    Run one full-rollout training step on synthetic data to check peak VRAM usage.
-    No dataset required. Reports SAFE / WARNING / CRITICAL verdict.
+    Run one full-rollout training step on real training data to check peak VRAM usage.
+    Loads and augments the training split (identical to train_pipeline) so that node
+    count, window length, and batch size all reflect actual training conditions.
+    Reports SAFE / WARNING / CRITICAL verdict.
     """
     device = torch.device(args.device)
     if not torch.cuda.is_available():
         logger.warning("No CUDA device — probe skipped (CPU has no OOM risk).")
         return
 
+    # --- 1. Data Preparation (mirrors train_pipeline) ---
+    logger.info("loading training data for probe...")
+    train_raw, _, _ = FlowData.spawn(
+        data_dir=args.data_dir, spatial_dim=args.spatial_dim,
+        win_len=args.win_len, win_stride=args.win_stride,
+    )
+
+    train_seqs = torch.cat(train_raw.seqs, dim=0)
+    train_coords = torch.cat(train_raw.coords, dim=0)
+    feature_scaler = StandardScalerTensor().fit(train_seqs, channel_dim=-1)
+    coord_scaler = MinMaxScalerTensor(norm_range="bipolar").fit(train_coords, channel_dim=-1)
+
+    probe_dataset = ScaledCFDataset(
+        train_raw, feature_scaler=feature_scaler, coord_scaler=coord_scaler,
+        use_log_pressure=args.use_log_pressure, pressure_channel_idx=args.spatial_dim,
+    )
+    probe_loader = DataLoader(probe_dataset, batch_size=args.batch_size, shuffle=False,
+                              num_workers=args.num_workers, pin_memory=True)
+
+    seq_std, coords_norm = next(iter(probe_loader))
+    seq_std     = seq_std.to(device)
+    coords_norm = coords_norm.to(device)
+
+    B, T, N, C = seq_std.shape
+
+    # --- 2. Model Initialization ---
     model = _build_model(args)
     model.to(device).train()
 
-    N, C = args.probe_n, args.spatial_dim + 2
-    B, win_len = args.batch_size, args.win_len
-
-    logger.info(f"probe config: batch={B}, nodes={N}, win_len={win_len}, "
+    logger.info(f"probe config: batch={B}, frames={T}, nodes={N}, channels={C}, "
                 f"max_rollout={args.max_rollout_steps}, model={args.model_type}")
-
-    seq    = torch.randn(B, win_len, N, C, device=device)
-    coords = torch.rand(B, N, args.spatial_dim, device=device) * 2 - 1
 
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     criterion = NMSECriterion()
 
+    # --- 3. Forward / Backward Pass ---
     torch.cuda.reset_peak_memory_stats(device)
 
-    input_state = seq[:, 0]
+    input_state = seq_std[:, 0]
     loss = torch.tensor(0.0, device=device)
     for t in range(args.max_rollout_steps):
-        if hasattr(model, 'time_encoder'):
-            pred = model(input_state, coords, step=t)
+        if hasattr(model, "time_encoder"):
+            pred = model(input_state, coords_norm, step=t)
         else:
-            pred = model(input_state, coords)
-        loss = loss + criterion(pred, seq[:, t + 1])
+            pred = model(input_state, coords_norm)
+        loss = loss + criterion(pred, seq_std[:, t + 1])
         input_state = pred.detach()
     (loss / args.max_rollout_steps).backward()
     optimizer.step()
 
+    # --- 4. VRAM Report ---
     peak  = torch.cuda.max_memory_allocated(device)
     total = torch.cuda.get_device_properties(device).total_memory
     pct   = 100 * peak / total
@@ -382,6 +401,6 @@ def probe_pipeline(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     args = flow_args.get_args()
 
-    if args.mode == "probe":  probe_pipeline(args)
+    if "probe" in args.mode:  probe_pipeline(args)
     if "train" in args.mode:  train_pipeline(args)
     if "infer" in args.mode:  inference_pipeline(args)

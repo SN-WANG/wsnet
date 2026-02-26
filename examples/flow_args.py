@@ -20,7 +20,7 @@ def get_args() -> argparse.Namespace:
                         help="Random seed for reproducibility across numpy and torch.")
     parser.add_argument("--output_dir", type=str, default="./runs",
                         help="Root directory to save checkpoints, logs, and animations.")
-    parser.add_argument("--mode", type=str, default="train_infer", choices=["train", "infer", "train_infer", "probe"],
+    parser.add_argument("--mode", type=str, default="train_infer_probe", choices=["train", "infer", "probe"],
                         help="Execution mode: train model, run inference, both, or probe for OOM risk.")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Computation device ('cuda', 'cpu', or 'cuda:0').")
@@ -42,9 +42,6 @@ def get_args() -> argparse.Namespace:
                         help="Batch size for training and validation.")
     parser.add_argument("--num_workers", type=int, default=4,
                         help="Number of subprocesses for data loading.")
-    parser.add_argument("--probe_n", type=int, default=10000,
-                        help="[probe mode] Synthetic node count for OOM stress test. "
-                             "Use a value in the expected range of your real dataset (e.g. 5000–20000).")
 
     # Preprocessing
     parser.add_argument("--use_log_pressure", type=bool, default=False,
@@ -119,7 +116,7 @@ def get_args() -> argparse.Namespace:
     # Physics loss
     parser.add_argument("--use_physics_loss", type=bool, default=False,
                         help="Enable CompressibleFlowCriterion (NMSE + FD-based physics residuals).")
-    parser.add_argument("--lambda_phy", type=float, default=0.1,
+    parser.add_argument("--lambda_physics", type=float, default=0.1,
                         help="Weight of physics loss relative to data (NMSE) loss.")
     parser.add_argument("--lambda_mass", type=float, default=1.0,
                         help="Sub-weight for mass conservation (∇·v) residual.")

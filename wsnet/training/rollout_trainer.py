@@ -9,7 +9,7 @@ from typing import Any
 
 from wsnet.training.base_trainer import BaseTrainer
 from wsnet.training.base_criterion import NMSECriterion
-from wsnet.training.physics_criterion import CompressibleFlowCriterion
+from wsnet.training.flow_criterion import FlowCriterion
 from wsnet.utils.hue_logger import hue, logger
 
 
@@ -27,7 +27,7 @@ class RolloutTrainer(BaseTrainer):
     Configs:
     1. Default optimizer: AdamW
     2. Default scheduler: CosineAnnealingLR
-    3. Default criterion: NMSE + Sobolev Gradient Penalty
+    3. Default criterion: NMSE + Physics Informed Penalty
     4. Default curriculum: Adapts rollout steps and noise deviation based on val loss stability
     """
 
@@ -40,9 +40,9 @@ class RolloutTrainer(BaseTrainer):
                  noise_std_init: float = 0.05, noise_decay: float = 0.9,
                  # physics params
                  use_physics_loss: bool = False,
-                 lambda_phy: float = 0.1,
+                 lambda_phyiscs: float = 0.1,
                  lambda_mass: float = 1.0, lambda_momentum: float = 1.0, lambda_energy: float = 1.0,
-                 physics_grid_size: Any = None,
+                 latent_grid_size: Any = None,
                  # base params
                  **kwargs):
         """
@@ -55,11 +55,11 @@ class RolloutTrainer(BaseTrainer):
             noise_std_init (float): Initial noise injection std dev.
             noise_decay (float): Multiplier for noise when curriculum advances.
             use_physics_loss (bool): Whether to use physics-informed loss.
-            lambda_phy (float): Weight of physics loss vs data loss.
+            lambda_phyiscs (float): Weight of physics loss vs data loss.
             lambda_mass (float): Sub-weight for mass conservation residual.
             lambda_momentum (float): Sub-weight for momentum conservation residual.
             lambda_energy (float): Sub-weight for energy conservation residual.
-            physics_grid_size: [G1, G2] for FD grid in physics loss (usually model's latent_grid_size).
+            latent_grid_size: [L1, L2] for FD grid in physics loss.
             **kwargs: Arguments passed to BaseTrainer.
         """
 
@@ -76,11 +76,11 @@ class RolloutTrainer(BaseTrainer):
         if scheduler is None:
             scheduler = CosineAnnealingLR(optimizer, T_max=max_epochs, eta_min=eta_min)
 
-        # default criterion: NMSE or physics-informed
+        # default criterion: pure data-driven or physics-informed
         if criterion is None:
             if use_physics_loss:
-                criterion = CompressibleFlowCriterion(
-                    lambda_phy=lambda_phy,
+                criterion = FlowCriterion(
+                    lambda_phyiscs=lambda_phyiscs,
                     lambda_mass=lambda_mass,
                     lambda_momentum=lambda_momentum,
                     lambda_energy=lambda_energy
@@ -96,7 +96,7 @@ class RolloutTrainer(BaseTrainer):
         self.rollout_patience = rollout_patience
         self.noise_std_init = noise_std_init
         self.noise_decay = noise_decay
-        self.physics_grid_size = physics_grid_size
+        self.latent_grid_size = latent_grid_size
 
         # 3. Initialize curriculum state
         self.rollout_counter = 0
@@ -153,41 +153,40 @@ class RolloutTrainer(BaseTrainer):
         """
 
         # 1. parse augmented "super batch"
-        seq_window, coords_window = batch
+        seq, coords = batch
 
         # 2. intialize state x_0
-        input_state = seq_window[:, 0]  # t = 0
+        input_state = seq[:, 0]  # t = 0
         loss = torch.tensor(0.0, device=self.device)
 
         # 3. pushforward rollout
         for t in range(self.current_rollout_steps):
-            # a. save clean state before noise, then inject noise into model input
+            # a. inject noise
             clean_input = input_state
             if self.model.training and self.current_noise_std > 1e-6:
                 input_state = clean_input + torch.randn_like(clean_input) * self.current_noise_std
 
-            # b. predict (pass step counter when model supports temporal encoding)
-            if coords_window is not None:
-                if hasattr(self.model, 'time_encoder'):
-                    pred_state = self.model(input_state, coords_window, step=t)
+            # b. predict
+            if coords is not None:
+                if hasattr(self.model, "time_encoder"):
+                    pred_state = self.model(input_state, coords, step=t)
                 else:
-                    pred_state = self.model(input_state, coords_window)
+                    pred_state = self.model(input_state, coords)
             else:
                 pred_state = self.model(input_state)
 
             # c. compute step loss
-            target_state = seq_window[:, t + 1]
+            target_state = seq[:, t + 1]
 
-            # For physics loss: pass clean prev state (not noisy) for accurate temporal FD
-            if isinstance(self.criterion, CompressibleFlowCriterion):
+            if isinstance(self.criterion, FlowCriterion):
                 loss += self.criterion(pred_state, target_state,
                                        prev=clean_input,
-                                       coords=coords_window,
-                                       latent_grid_size=self.physics_grid_size)
+                                       coords=coords,
+                                       latent_grid_size=self.latent_grid_size)
             else:
                 loss += self.criterion(pred_state, target_state)
 
-            # d. update state (use model prediction, not noisy input)
+            # d. update state
             input_state = pred_state
 
         return loss / self.current_rollout_steps

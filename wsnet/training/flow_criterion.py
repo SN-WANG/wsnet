@@ -9,7 +9,7 @@ from wsnet.training.base_criterion import BaseCriterion
 
 
 # ============================================================
-# Finite-Difference helpers (module-level, no autograd)
+# Finite-Difference helpers
 # Support 2D grid [G1,G2] and 3D grid [G1,G2,G3]
 # ============================================================
 
@@ -132,26 +132,14 @@ def _grid_gradient(scalar_grid: Tensor) -> Tensor:
 
 
 # ============================================================
-# Base class (kept minimal; autograd helpers removed)
+# Flow Criterion
 # ============================================================
 
-class PhysicsCriterion(BaseCriterion):
-    """Base class for physics-constrained loss functions."""
-
-    def __init__(self, eps: float = 1e-8):
-        super().__init__()
-        self.eps = eps
-
-
-# ============================================================
-# Compressible Flow Criterion
-# ============================================================
-
-class CompressibleFlowCriterion(PhysicsCriterion):
+class FlowCriterion(BaseCriterion):
     """
     Physics-informed loss for compressible flow (FD-based, no autograd).
 
-    Total loss = NMSE(pred, target) + lambda_phy * L_physics
+    Total loss = NMSE(pred, target) + lambda_phyiscs * L_physics
 
     Physics residuals are computed in normalized feature space via finite differences
     on a scatter-projected regular grid. Zero-residual is scale-invariant, so working
@@ -167,7 +155,7 @@ class CompressibleFlowCriterion(PhysicsCriterion):
         - Energy proxy:   ∂T/∂t ≈ 0
 
     Args:
-        lambda_phy:      Weight of physics loss relative to data (NMSE) loss.
+        lambda_phyiscs:      Weight of physics loss relative to data (NMSE) loss.
         lambda_mass:     Sub-weight for mass residual.
         lambda_momentum: Sub-weight for momentum residual.
         lambda_energy:   Sub-weight for energy residual.
@@ -176,21 +164,22 @@ class CompressibleFlowCriterion(PhysicsCriterion):
 
     def __init__(
         self,
-        lambda_phy: float = 0.1,
+        lambda_phyiscs: float = 0.1,
         lambda_mass: float = 1.0,
         lambda_momentum: float = 1.0,
         lambda_energy: float = 1.0,
         eps: float = 1e-8,
     ):
-        super().__init__(eps=eps)
+        super().__init__()
 
-        if any(v < 0 for v in (lambda_phy, lambda_mass, lambda_momentum, lambda_energy)):
+        if any(v < 0 for v in (lambda_phyiscs, lambda_mass, lambda_momentum, lambda_energy)):
             raise ValueError("All lambda weights must be non-negative")
 
-        self.lambda_phy = lambda_phy
+        self.lambda_phyiscs = lambda_phyiscs
         self.lambda_mass = lambda_mass
         self.lambda_momentum = lambda_momentum
         self.lambda_energy = lambda_energy
+        self.eps = eps
 
     def _physics_loss(
         self,
@@ -250,14 +239,14 @@ class CompressibleFlowCriterion(PhysicsCriterion):
         **kwargs,
     ) -> Tensor:
         """
-        Compute total loss = NMSE + lambda_phy * physics_loss.
+        Compute total loss = NMSE + lambda_phyiscs * physics_loss.
 
         Args:
             pred:             Predicted state. Shape (B, N, C).
             target:           Ground truth. Shape (B, N, C). Required for data loss.
             prev:             Clean previous state at t. Shape (B, N, C). Required for physics.
             coords:           Normalized node coordinates. Shape (B, N, D). Required for physics.
-            latent_grid_size: [G1, G2] or [G1, G2, G3] for FD grid. Required for physics.
+            latent_grid_size: [L1, L2] or [L1, L2, L3] for FD grid. Required for physics.
             dt:               Time step (normalized). Default 1.0.
             **kwargs:         Ignored (for API compatibility).
 
@@ -275,6 +264,6 @@ class CompressibleFlowCriterion(PhysicsCriterion):
         # Physics loss (only when all required inputs are present)
         if prev is not None and coords is not None and latent_grid_size is not None:
             phy_loss = self._physics_loss(pred, prev, coords, latent_grid_size, dt)
-            return data_loss + self.lambda_phy * phy_loss
+            return data_loss + self.lambda_phyiscs * phy_loss
 
         return data_loss
