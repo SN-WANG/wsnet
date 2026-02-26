@@ -3,319 +3,278 @@
 
 import torch
 from torch import Tensor
-from typing import Optional
+from typing import Optional, List
 
 from wsnet.training.base_criterion import BaseCriterion
 
 
-class PhysicsCriterion(BaseCriterion):
-    """Base class for physics-constrained loss functions.
+# ============================================================
+# Finite-Difference helpers (module-level, no autograd)
+# Support 2D grid [G1,G2] and 3D grid [G1,G2,G3]
+# ============================================================
 
-    Provides interface for losses that enforce physical constraints
-    such as conservation laws (mass, momentum, energy).
+def _scatter_to_grid(field: Tensor, coords: Tensor, grid_size: List[int]) -> Tensor:
     """
+    Scatter-mean: map N unstructured nodes to a regular grid via nearest-neighbor binning.
+    Supports both 2D ([G1,G2]) and 3D ([G1,G2,G3]) grids.
+
+    Args:
+        field:     (B, N, C) — node features to project.
+        coords:    (B, N, D) — normalized coordinates in [-1, 1], D = spatial_dim.
+        grid_size: [G1, G2] or [G1, G2, G3]
+
+    Returns:
+        (B, C, G1, G2) or (B, C, G1, G2, G3)
+    """
+    B, N, C = field.shape
+    D = len(grid_size)
+    device = field.device
+
+    total_cells = 1
+    for g in grid_size:
+        total_cells *= g
+
+    # Map coords [-1,1] to nearest grid indices
+    dims = torch.tensor(grid_size, dtype=torch.float32, device=device).view(1, 1, D)
+    unnorm = (coords + 1.0) / 2.0 * (dims - 1.0)
+    indices = unnorm.round().long()
+    for d, g in enumerate(grid_size):
+        indices[..., d] = indices[..., d].clamp(0, g - 1)
+
+    # Row-major flat index: stride[d] = product of grid_size[d+1:]
+    strides = []
+    s = 1
+    for g in reversed(grid_size):
+        strides.append(s)
+        s *= g
+    strides = list(reversed(strides))
+    strides_t = torch.tensor(strides, dtype=torch.long, device=device).view(1, 1, D)
+    flat_idx = (indices * strides_t).sum(dim=-1)                # (B, N)
+
+    batch_idx = torch.arange(B, device=device).view(B, 1).expand(B, N)
+    global_idx = (batch_idx * total_cells + flat_idx).view(-1)  # (B*N,)
+
+    flat_field = field.reshape(-1, C)
+    grid_flat = torch.zeros(B * total_cells, C, device=device, dtype=field.dtype)
+    counts = torch.zeros(B * total_cells, 1, device=device, dtype=field.dtype)
+
+    grid_flat.index_add_(0, global_idx, flat_field)
+    counts.index_add_(0, global_idx,
+                      torch.ones(B * N, 1, device=device, dtype=field.dtype))
+
+    grid_flat = grid_flat / counts.clamp(min=1.0)
+
+    # (B * total_cells, C) -> (B, G1, ..., GD, C) -> (B, C, G1, ..., GD)
+    grid = grid_flat.view(B, *grid_size, C)
+    perm = [0, D + 1] + list(range(1, D + 1))
+    return grid.permute(*perm).contiguous()
+
+
+def _central_diff(tensor: Tensor, dim: int) -> Tensor:
+    """
+    Central difference along spatial dimension `dim` (dim >= 1, 1-indexed from batch).
+    Boundaries use first-order forward/backward difference.
+    """
+    out = torch.zeros_like(tensor)
+    ndim = tensor.dim()
+    # Interior: central difference
+    slc_fwd = [slice(None)] * ndim; slc_fwd[dim] = slice(2, None)
+    slc_bwd = [slice(None)] * ndim; slc_bwd[dim] = slice(None, -2)
+    slc_out = [slice(None)] * ndim; slc_out[dim] = slice(1, -1)
+    out[tuple(slc_out)] = (tensor[tuple(slc_fwd)] - tensor[tuple(slc_bwd)]) * 0.5
+    # Forward boundary (first slice)
+    slc_f1 = [slice(None)] * ndim; slc_f1[dim] = slice(1, 2)
+    slc_f0 = [slice(None)] * ndim; slc_f0[dim] = slice(0, 1)
+    slc_o0 = [slice(None)] * ndim; slc_o0[dim] = slice(0, 1)
+    out[tuple(slc_o0)] = tensor[tuple(slc_f1)] - tensor[tuple(slc_f0)]
+    # Backward boundary (last slice)
+    slc_lm1 = [slice(None)] * ndim; slc_lm1[dim] = slice(-2, -1)
+    slc_l   = [slice(None)] * ndim; slc_l[dim]   = slice(-1, None)
+    slc_ol  = [slice(None)] * ndim; slc_ol[dim]  = slice(-1, None)
+    out[tuple(slc_ol)] = tensor[tuple(slc_l)] - tensor[tuple(slc_lm1)]
+    return out
+
+
+def _grid_divergence(vector_grid: Tensor) -> Tensor:
+    """
+    Divergence of a vector field on a regular grid using central differences.
+    Supports 2D and 3D grids.
+
+    Args:
+        vector_grid: (B, D, *spatial) where D = spatial_dim.
+            2D: (B, 2, H, W);  3D: (B, 3, X, Y, Z)
+
+    Returns:
+        (B, *spatial) — div(V) = sum_d dV_d/dx_d
+    """
+    D = vector_grid.shape[1]
+    div = torch.zeros_like(vector_grid[:, 0])
+    for d in range(D):
+        div = div + _central_diff(vector_grid[:, d], dim=d + 1)
+    return div
+
+
+def _grid_gradient(scalar_grid: Tensor) -> Tensor:
+    """
+    Gradient of a scalar field on a regular grid using central differences.
+    Supports 2D and 3D grids.
+
+    Args:
+        scalar_grid: (B, *spatial)
+            2D: (B, H, W);  3D: (B, X, Y, Z)
+
+    Returns:
+        (B, D, *spatial) — [df/dx_0, df/dx_1, ...]
+    """
+    spatial_dims = scalar_grid.dim() - 1
+    grads = [_central_diff(scalar_grid, dim=d + 1) for d in range(spatial_dims)]
+    return torch.stack(grads, dim=1)
+
+
+# ============================================================
+# Base class (kept minimal; autograd helpers removed)
+# ============================================================
+
+class PhysicsCriterion(BaseCriterion):
+    """Base class for physics-constrained loss functions."""
 
     def __init__(self, eps: float = 1e-8):
         super().__init__()
         self.eps = eps
 
-    def _compute_time_derivative(
-        self,
-        field: Tensor,
-        time: Tensor
-    ) -> Tensor:
-        """Compute time derivative using automatic differentiation.
 
-        Args:
-            field: Scalar or vector field. Shape (B, N, ...) or (N, ...).
-            time: Time scalar or tensor with requires_grad=True.
-
-        Returns:
-            Time derivative of the field. Same shape as field.
-
-        Raises:
-            RuntimeError: If time does not have requires_grad=True.
-        """
-        if not time.requires_grad:
-            raise RuntimeError("Time tensor must have requires_grad=True for gradient computation")
-
-        return torch.autograd.grad(
-            outputs=field,
-            inputs=time,
-            grad_outputs=torch.ones_like(field),
-            create_graph=True,
-            retain_graph=True
-        )[0]
-
-    def _compute_divergence_2d(
-        self,
-        vector_field: Tensor,
-        coords: Tensor
-    ) -> Tensor:
-        """Compute 2D divergence of a vector field.
-
-        Computes: div(V) = dVx/dx + dVy/dy
-
-        Args:
-            vector_field: Vector field with 2 components. Shape (B, N, 2) or (N, 2).
-                vector_field[..., 0] is x-component, [..., 1] is y-component.
-            coords: Spatial coordinates [x, y]. Shape (B, N, 2) or (N, 2).
-
-        Returns:
-            Divergence of the vector field. Shape (B, N) or (N,).
-
-        Raises:
-            ValueError: If tensor dimensions are incorrect.
-        """
-        vx = vector_field[..., 0]  # x-component
-        vy = vector_field[..., 1]  # y-component
-
-        x = coords[..., 0]
-        y = coords[..., 1]
-
-        dvx_dx = torch.autograd.grad(
-            outputs=vx,
-            inputs=x,
-            grad_outputs=torch.ones_like(vx),
-            create_graph=True,
-            retain_graph=True
-        )[0]
-
-        dvy_dy = torch.autograd.grad(
-            outputs=vy,
-            inputs=y,
-            grad_outputs=torch.ones_like(vy),
-            create_graph=True,
-            retain_graph=True
-        )[0]
-
-        return dvx_dx + dvy_dy
-
-    def _compute_gradient_2d(
-        self,
-        scalar_field: Tensor,
-        coords: Tensor
-    ) -> Tensor:
-        """Compute 2D gradient of a scalar field.
-
-        Computes: grad(f) = [df/dx, df/dy]
-
-        Args:
-            scalar_field: Scalar field. Shape (B, N) or (N,).
-            coords: Spatial coordinates [x, y]. Shape (B, N, 2) or (N, 2).
-
-        Returns:
-            Gradient of the scalar field. Shape (B, N, 2) or (N, 2).
-
-        Raises:
-            ValueError: If tensor dimensions are incorrect.
-        """
-        x = coords[..., 0]
-        y = coords[..., 1]
-
-        df_dx = torch.autograd.grad(
-            outputs=scalar_field,
-            inputs=x,
-            grad_outputs=torch.ones_like(scalar_field),
-            create_graph=True,
-            retain_graph=True
-        )[0]
-
-        df_dy = torch.autograd.grad(
-            outputs=scalar_field,
-            inputs=y,
-            grad_outputs=torch.ones_like(scalar_field),
-            create_graph=True,
-            retain_graph=True
-        )[0]
-
-        return torch.stack([df_dx, df_dy], dim=-1)
-
+# ============================================================
+# Compressible Flow Criterion
+# ============================================================
 
 class CompressibleFlowCriterion(PhysicsCriterion):
-    """Physics-informed loss for compressible flow conservation laws.
-
-    Enforces mass, momentum, and energy conservation for compressible
-    Navier-Stokes equations. Based on the paper's methodology for
-    high-pressure-ratio transient flows.
-
-    Governing Equations (Euler form, inviscid):
-        1. Continuity (Mass): ∂ρ/∂t + ∇·(ρv) = 0
-        2. Momentum: ∂(ρv)/∂t + ∇·(ρv⊗v) + ∇p = 0
-        3. Energy: ∂(ρE)/∂t + ∇·[(ρE + p)v] = 0
-        4. State Equation: p = ρRT
-
-    Attributes:
-        R: Gas constant for hydrogen (J/(kg·K)). Default 4124.0.
-        cv: Specific heat at constant volume (J/(kg·K)). Default 10120.0.
-        lambda_mass: Weight for mass conservation residual.
-        lambda_momentum: Weight for momentum conservation residual.
-        lambda_energy: Weight for energy conservation residual.
-        eps: Small constant for numerical stability.
     """
+    Physics-informed loss for compressible flow (FD-based, no autograd).
 
-    HYDROGEN_R: float = 4124.0  # J/(kg·K)
-    HYDROGEN_CV: float = 10120.0  # J/(kg·K)
+    Total loss = NMSE(pred, target) + lambda_phy * L_physics
+
+    Physics residuals are computed in normalized feature space via finite differences
+    on a scatter-projected regular grid. Zero-residual is scale-invariant, so working
+    in normalized space is valid without denormalization.
+
+    Channel layout (inferred from coords.shape[-1] = spatial_dim):
+        2D: [Vx, Vy, P_log, T]        v=[:2], p=[2], T=[3]
+        3D: [Vx, Vy, Vz, P_log, T]    v=[:3], p=[3], T=[4]
+
+    Kinematic residuals enforced (density-free, no ideal-gas law needed):
+        - Mass proxy:     ∇·v ≈ 0
+        - Momentum proxy: ∂v/∂t + ∇p ≈ 0
+        - Energy proxy:   ∂T/∂t ≈ 0
+
+    Args:
+        lambda_phy:      Weight of physics loss relative to data (NMSE) loss.
+        lambda_mass:     Sub-weight for mass residual.
+        lambda_momentum: Sub-weight for momentum residual.
+        lambda_energy:   Sub-weight for energy residual.
+        eps:             Numerical stability constant.
+    """
 
     def __init__(
         self,
-        R: float = None,
-        cv: float = None,
+        lambda_phy: float = 0.1,
         lambda_mass: float = 1.0,
         lambda_momentum: float = 1.0,
         lambda_energy: float = 1.0,
-        eps: float = 1e-8
+        eps: float = 1e-8,
     ):
         super().__init__(eps=eps)
 
-        self.R = R if R is not None else self.HYDROGEN_R
-        self.cv = cv if cv is not None else self.HYDROGEN_CV
+        if any(v < 0 for v in (lambda_phy, lambda_mass, lambda_momentum, lambda_energy)):
+            raise ValueError("All lambda weights must be non-negative")
 
-        if lambda_mass < 0 or lambda_momentum < 0 or lambda_energy < 0:
-            raise ValueError("Lambda weights must be non-negative")
-
+        self.lambda_phy = lambda_phy
         self.lambda_mass = lambda_mass
         self.lambda_momentum = lambda_momentum
         self.lambda_energy = lambda_energy
+
+    def _physics_loss(
+        self,
+        pred: Tensor,
+        prev: Tensor,
+        coords: Tensor,
+        latent_grid_size: List[int],
+        dt: float,
+    ) -> Tensor:
+        """
+        Compute physics residual loss via FD on latent grid.
+
+        Args:
+            pred:             (B, N, C) — predicted state at t+1
+            prev:             (B, N, C) — clean state at t (no noise)
+            coords:           (B, N, D) — normalized coords in [-1, 1]
+            latent_grid_size: [G1, G2] or [G1, G2, G3]
+            dt:               Time step size (normalized)
+        """
+        sd = coords.shape[-1]  # spatial_dim: 2 or 3
+
+        # Project to regular grid: (B, C, *spatial)
+        pred_grid = _scatter_to_grid(pred, coords, latent_grid_size)
+        prev_grid = _scatter_to_grid(prev, coords, latent_grid_size)
+
+        # Temporal FD
+        d_dt = (pred_grid - prev_grid) / dt
+
+        # Channel indexing: [Vx, Vy, (Vz,) P_log, T]
+        v_grid = pred_grid[:, :sd]   # (B, sd, *spatial)
+        p_grid = pred_grid[:, sd]    # (B, *spatial)
+
+        # Mass proxy: ∇·v ≈ 0
+        loss_mass = torch.mean(_grid_divergence(v_grid) ** 2)
+
+        # Momentum proxy: ∂v/∂t + ∇p ≈ 0
+        dv_dt = d_dt[:, :sd]
+        grad_p = _grid_gradient(p_grid)
+        loss_momentum = torch.mean((dv_dt + grad_p) ** 2)
+
+        # Energy proxy: ∂T/∂t ≈ 0
+        dT_dt = d_dt[:, sd + 1]
+        loss_energy = torch.mean(dT_dt ** 2)
+
+        return (self.lambda_mass * loss_mass +
+                self.lambda_momentum * loss_momentum +
+                self.lambda_energy * loss_energy)
 
     def forward(
         self,
         pred: Tensor,
         target: Optional[Tensor] = None,
+        prev: Optional[Tensor] = None,
         coords: Optional[Tensor] = None,
-        time: Optional[Tensor] = None,
-        **kwargs
+        latent_grid_size: Optional[List[int]] = None,
+        dt: float = 1.0,
+        **kwargs,
     ) -> Tensor:
-        """Compute physics residuals for compressible flow.
+        """
+        Compute total loss = NMSE + lambda_phy * physics_loss.
 
         Args:
-            pred: Predicted flow field [vx, vy, p, T].
-                Shape (B, N, 4) where:
-                - B: batch_size, N: num_nodes
-                - pred[..., 0]: velocity x-component (vx)
-                - pred[..., 1]: velocity y-component (vy)
-                - pred[..., 2]: pressure (p)
-                - pred[..., 3]: temperature (T)
-            target: Ground truth (optional, unused in physics loss).
-            coords: Spatial coordinates [x, y]. Shape (B, N, 2) or (N, 2).
-                Required for spatial gradients.
-            time: Time scalar with requires_grad=True for temporal derivatives.
-            **kwargs: Additional arguments (ignored).
+            pred:             Predicted state. Shape (B, N, C).
+            target:           Ground truth. Shape (B, N, C). Required for data loss.
+            prev:             Clean previous state at t. Shape (B, N, C). Required for physics.
+            coords:           Normalized node coordinates. Shape (B, N, D). Required for physics.
+            latent_grid_size: [G1, G2] or [G1, G2, G3] for FD grid. Required for physics.
+            dt:               Time step (normalized). Default 1.0.
+            **kwargs:         Ignored (for API compatibility).
 
         Returns:
-            Tensor: Scalar total loss.
-
-        Raises:
-            ValueError: If input shapes are incorrect or coords/time are missing.
+            Scalar loss tensor.
         """
-        if pred.dim() != 3 or pred.shape[-1] != 4:
-            raise ValueError(
-                f"pred must have shape (B, N, 4), got {pred.shape}"
-            )
+        # Data loss (NMSE)
+        if target is not None:
+            mse = torch.sum((target - pred) ** 2)
+            norm = torch.sum(target ** 2) + self.eps
+            data_loss = mse / norm
+        else:
+            data_loss = torch.tensor(0.0, device=pred.device)
 
-        if coords is None:
-            raise ValueError("coords must be provided for spatial gradient computation")
-        if time is None:
-            raise ValueError("time must be provided for temporal derivative computation")
+        # Physics loss (only when all required inputs are present)
+        if prev is not None and coords is not None and latent_grid_size is not None:
+            phy_loss = self._physics_loss(pred, prev, coords, latent_grid_size, dt)
+            return data_loss + self.lambda_phy * phy_loss
 
-        # Unpack prediction variables
-        vx = pred[..., 0]        # (B, N)
-        vy = pred[..., 1]        # (B, N)
-        p = pred[..., 2]         # (B, N)
-        T = pred[..., 3]         # (B, N)
-
-        # Compute density from ideal gas law: ρ = p / (R * T)
-        rho = p / (self.R * T + self.eps)  # (B, N)
-
-        # Compute velocity vector and momentum
-        v = torch.stack([vx, vy], dim=-1)           # (B, N, 2)
-        rho_v = rho.unsqueeze(-1) * v               # (B, N, 2)
-
-        # Compute total energy: E = cv * T + 0.5 * |v|^2
-        kinetic_energy = 0.5 * (vx ** 2 + vy ** 2)  # (B, N)
-        internal_energy = self.cv * T                  # (B, N)
-        E = internal_energy + kinetic_energy           # (B, N)
-        rho_E = rho * E                              # (B, N)
-
-        # Compute total enthalpy: ρE + p
-        rho_E_p = rho_E + p                         # (B, N)
-
-        # ==============================
-        # Compute Conservation Residuals
-        # ==============================
-
-        # Time derivatives
-        drho_dt = self._compute_time_derivative(rho, time)                  # (B, N)
-        drho_v_dt = self._compute_time_derivative(rho_v, time)              # (B, N, 2)
-        drho_E_dt = self._compute_time_derivative(rho_E, time)              # (B, N)
-
-        # Spatial derivatives
-        div_rho_v = self._compute_divergence_2d(rho_v, coords)             # (B, N)
-
-        # Momentum convection: ∇·(ρv⊗v)
-        # Outer product: (ρv_i * v_j)
-        v_expanded = v.unsqueeze(-1)                    # (B, N, 2, 1)
-        rho_v_expanded = rho_v.unsqueeze(-1)            # (B, N, 2, 1)
-        rho_v_outer_v = rho_v_expanded * v_expanded.transpose(-2, -1)  # (B, N, 2, 2)
-
-        # Tensor divergence
-        def _tensor_divergence_2d(tensor: Tensor, coords: Tensor) -> Tensor:
-            """Compute divergence of a 2D tensor field."""
-            x = coords[..., 0]
-            y = coords[..., 1]
-
-            # First row
-            t11 = tensor[..., 0, 0]
-            t12 = tensor[..., 0, 1]
-            dt11_dx = torch.autograd.grad(t11, x, torch.ones_like(t11), create_graph=True, retain_graph=True)[0]
-            dt12_dy = torch.autograd.grad(t12, y, torch.ones_like(t12), create_graph=True, retain_graph=True)[0]
-            div_x = dt11_dx + dt12_dy
-
-            # Second row
-            t21 = tensor[..., 1, 0]
-            t22 = tensor[..., 1, 1]
-            dt21_dx = torch.autograd.grad(t21, x, torch.ones_like(t21), create_graph=True, retain_graph=True)[0]
-            dt22_dy = torch.autograd.grad(t22, y, torch.ones_like(t22), create_graph=True, retain_graph=True)[0]
-            div_y = dt21_dx + dt22_dy
-
-            return torch.stack([div_x, div_y], dim=-1)
-
-        div_rho_v_v = _tensor_divergence_2d(rho_v_outer_v, coords)  # (B, N, 2)
-
-        # Pressure gradient
-        grad_p = self._compute_gradient_2d(p, coords)                # (B, N, 2)
-
-        # Energy flux divergence: ∇·[(ρE + p)v]
-        energy_flux = rho_E_p.unsqueeze(-1) * v                    # (B, N, 2)
-        div_energy_flux = self._compute_divergence_2d(energy_flux, coords)  # (B, N)
-
-        # ==============================
-        # Assemble Residuals
-        # ==============================
-
-        # Continuity (mass) residual: ∂ρ/∂t + ∇·(ρv)
-        residual_mass = drho_dt + div_rho_v                           # (B, N)
-
-        # Momentum residual: ∂(ρv)/∂t + ∇·(ρv⊗v) + ∇p
-        residual_momentum = drho_v_dt + div_rho_v_v + grad_p            # (B, N, 2)
-
-        # Energy residual: ∂(ρE)/∂t + ∇·[(ρE + p)v]
-        residual_energy = drho_E_dt + div_energy_flux                   # (B, N)
-
-        # ==============================
-        # Compute Loss Components
-        # ==============================
-
-        # L2 norm squared of each residual
-        loss_mass = torch.mean(residual_mass ** 2)                     # ()
-        loss_momentum = torch.mean(torch.sum(residual_momentum ** 2, dim=-1))  # ()
-        loss_energy = torch.mean(residual_energy ** 2)                   # ()
-
-        # Weighted sum
-        total = (
-            self.lambda_mass * loss_mass +
-            self.lambda_momentum * loss_momentum +
-            self.lambda_energy * loss_energy
-        )
-
-        return total
+        return data_loss

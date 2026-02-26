@@ -20,72 +20,113 @@ def get_args() -> argparse.Namespace:
                         help="Random seed for reproducibility across numpy and torch.")
     parser.add_argument("--output_dir", type=str, default="./runs",
                         help="Root directory to save checkpoints, logs, and animations.")
-    parser.add_argument("--mode", type=str, default="train_infer", choices=["train", "infer", "train_infer"],
-                        help="Execution mode: train model, run inference, or both.")
+    parser.add_argument("--mode", type=str, default="train_infer", choices=["train", "infer", "train_infer", "probe"],
+                        help="Execution mode: train model, run inference, both, or probe for OOM risk.")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Computation device ('cuda', 'cpu', or 'cuda:0').")
 
     # ----------------------------------------------------------------------
     # 2. Data Configuration
     # ----------------------------------------------------------------------
-    parser.add_argument("--data_dir", type=str, default="./dataset", 
+    parser.add_argument("--data_dir", type=str, default="./dataset",
                         help="Path to the directory containing simulation case folders.")
     parser.add_argument("--channel_names", type=list, default=["Vx", "Vy", "P", "T"],
                         help="Name list of the channels.")
     parser.add_argument("--spatial_dim", type=int, default=2, choices=[2, 3],
                         help="Spatial dimension of the fluid flow (2D or 3D).")
-    parser.add_argument("--win_len", type=int, default=8, 
+    parser.add_argument("--win_len", type=int, default=8,
                         help="Total window length for data slicing (input + label sequence).")
-    parser.add_argument("--win_stride", type=int, default=1, 
+    parser.add_argument("--win_stride", type=int, default=1,
                         help="Stride for sliding window augmentation.")
-    parser.add_argument("--batch_size", type=int, default=8, 
+    parser.add_argument("--batch_size", type=int, default=8,
                         help="Batch size for training and validation.")
-    parser.add_argument("--num_workers", type=int, default=4, 
+    parser.add_argument("--num_workers", type=int, default=4,
                         help="Number of subprocesses for data loading.")
+    parser.add_argument("--probe_n", type=int, default=10000,
+                        help="[probe mode] Synthetic node count for OOM stress test. "
+                             "Use a value in the expected range of your real dataset (e.g. 5000–20000).")
+
+    # Preprocessing
+    parser.add_argument("--use_log_pressure", type=bool, default=False,
+                        help="Apply log1p(p / 1e5) to pressure channel before standardization. "
+                             "Recommended for high-pressure-ratio (10000:1) data.")
 
     # ----------------------------------------------------------------------
-    # 3. GeoFNO Model Architecture
+    # 3. Model Selection
     # ----------------------------------------------------------------------
-    parser.add_argument("--modes", type=int, nargs='+', default=[12, 12], 
-                        help="Number of Fourier modes to keep per dimension.")
-    parser.add_argument("--latent_grid_size", type=int, nargs='+', default=[64, 64], 
-                        help="Resolution of the latent grid for spectral convolutions.")
-    parser.add_argument("--depth", type=int, default=4, 
-                        help="Number of stacked FNO blocks.")
-    parser.add_argument("--width", type=int, default=128, 
-                        help="Number of hidden channels in the FNO blocks.")
+    parser.add_argument("--model_type", type=str, default="geowno",
+                        choices=["geofno", "geowno"],
+                        help="Neural operator architecture: GeoFNO (Fourier) or GeoWNO (Haar Wavelet).")
+
+    # ----------------------------------------------------------------------
+    # 4. Model Architecture
+    # ----------------------------------------------------------------------
+    parser.add_argument("--modes", type=int, nargs='+', default=[12, 12],
+                        help="Number of Fourier/wavelet modes per dimension "
+                             "(GeoFNO: truncation; GeoWNO: dim indicator).")
+    parser.add_argument("--latent_grid_size", type=int, nargs='+', default=[64, 64],
+                        help="Resolution of the latent grid for spectral/wavelet convolutions.")
+    parser.add_argument("--depth", type=int, default=4,
+                        help="Number of stacked FNO/WNO blocks.")
+    parser.add_argument("--width", type=int, default=128,
+                        help="Number of hidden channels in the FNO/WNO blocks.")
 
     # Deformation Net Params
-    parser.add_argument("--deform_layers", type=int, default=2, 
+    parser.add_argument("--deform_layers", type=int, default=2,
                         help="Number of layers in the coordinate deformation network.")
-    parser.add_argument("--deform_hidden", type=int, default=32, 
+    parser.add_argument("--deform_hidden", type=int, default=32,
                         help="Hidden dimension size for the deformation network.")
 
+    # GeoWNO-specific params
+    parser.add_argument("--knn_k", type=int, default=6,
+                        help="[GeoWNO] Number of nearest neighbors for KNN-IDW point-to-grid aggregation.")
+    parser.add_argument("--rff_features", type=int, default=8,
+                        help="[GeoWNO] Random Fourier Features half-dim for spatial encoding"
+                             "(output: 2*rff_features).")
+    parser.add_argument("--time_features", type=int, default=4,
+                        help="[GeoWNO] Sinusoidal PE half-dim for temporal encoding"
+                             "(output: 2*time_features).")
+    parser.add_argument("--rff_sigma", type=float, default=1.0,
+                        help="[GeoWNO] RFF projection scale. Controls spatial frequency of encoding "
+                             "(1.0 = ~0.5 cycles across domain, survives KNN-IDW averaging).")
+
     # ----------------------------------------------------------------------
-    # 4. Training Strategy
+    # 5. Training Strategy
     # ----------------------------------------------------------------------
 
     # optimizer (AdamW)
-    parser.add_argument("--lr", type=float, default=5e-4, 
+    parser.add_argument("--lr", type=float, default=5e-4,
                         help="Initial learning rate.")
-    parser.add_argument("--weight_decay", type=float, default=1e-4, 
+    parser.add_argument("--weight_decay", type=float, default=1e-4,
                         help="Weight decay (L2 regularization) factor.")
 
     # scheduler (Cosine Annealing LR)
-    parser.add_argument("--max_epochs", type=int, default=350, 
+    parser.add_argument("--max_epochs", type=int, default=350,
                         help="Total number of training epochs.")
-    parser.add_argument("--eta_min", type=float, default=1e-6, 
+    parser.add_argument("--eta_min", type=float, default=1e-6,
                         help="Minimum learning rate.")
 
     # curriculum
-    parser.add_argument("--max_rollout_steps", type=int, default=7, 
+    parser.add_argument("--max_rollout_steps", type=int, default=7,
                         help="Maximum autoregressive rollout steps allowed.")
-    parser.add_argument("--rollout_patience", type=int, default=40, 
+    parser.add_argument("--rollout_patience", type=int, default=40,
                         help="Epochs of stable loss required to increase rollout difficulty.")
-    parser.add_argument("--noise_std_init", type=float, default=0.01, 
+    parser.add_argument("--noise_std_init", type=float, default=0.01,
                         help="Initial Std dev of Gaussian noise injected into input state.")
-    parser.add_argument("--noise_decay", type=float, default=0.7, 
+    parser.add_argument("--noise_decay", type=float, default=0.7,
                         help="Decay factor for noise when rollout steps increase.")
+
+    # Physics loss
+    parser.add_argument("--use_physics_loss", type=bool, default=False,
+                        help="Enable CompressibleFlowCriterion (NMSE + FD-based physics residuals).")
+    parser.add_argument("--lambda_phy", type=float, default=0.1,
+                        help="Weight of physics loss relative to data (NMSE) loss.")
+    parser.add_argument("--lambda_mass", type=float, default=1.0,
+                        help="Sub-weight for mass conservation (∇·v) residual.")
+    parser.add_argument("--lambda_momentum", type=float, default=1.0,
+                        help="Sub-weight for momentum (∂v/∂t + ∇p) residual.")
+    parser.add_argument("--lambda_energy", type=float, default=1.0,
+                        help="Sub-weight for energy (∂T/∂t) residual.")
 
     args = parser.parse_args()
     return args

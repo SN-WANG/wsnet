@@ -1,8 +1,5 @@
 """
-Sweep for wsnet
-===========================
-
-Combined functionality for:
+Sweep for wsnet, Combined functionality for:
 1. Cleaning Python cache files (__pycache__, *.pyc, *.pyo)
 2. Generating project directory tree with copy-to-clipboard support
 

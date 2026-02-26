@@ -1,291 +1,476 @@
-# Flow Sequence Visualization Module
+# Flow Sequence Visualization — PyVista / GPU-accelerated (replaces CFDRender)
 # Author: Shengning Wang
+#
+# GPU setup (NVIDIA headless server):
+#   export PYVISTA_FORCE_EGL=1    # select EGL backend before starting Python
+#   export PYVISTA_OFF_SCREEN=true
+# macOS / workstation with display: no extra env vars needed.
 
+import os
+import subprocess
 from pathlib import Path
-from typing import List, Union, Tuple
+from typing import List, Tuple, Union
 
-import torch
 import numpy as np
-import pyvista as pv
+import torch
 from torch import Tensor
 from tqdm.auto import tqdm
+import pyvista as pv
 
 from wsnet.utils.hue_logger import hue, logger
 
+
+# ---------------------------------------------------------------------------
+# Per-channel visualization metadata
+# ---------------------------------------------------------------------------
+
+def _channel_role(ch_idx: int, spatial_dim: int) -> str:
+    """Return role tag: 'velocity', 'pressure', or 'temperature'."""
+    if ch_idx < spatial_dim:
+        return 'velocity'
+    if ch_idx == spatial_dim:
+        return 'pressure'
+    return 'temperature'
+
+
+_CMAP: dict = {
+    'velocity':    'RdBu_r',   # diverging, zero = white — correct for ±Vx/Vy
+    'pressure':    'plasma',   # perceptually uniform sequential (log scale)
+    'temperature': 'plasma',   # same
+    'error':       'Reds',     # sequential, always non-negative
+}
+
+
 class FlowVis:
     """
-    High-performance CFD visualization engine using PyVista (VTK backend).
+    GPU-accelerated CFD visualization engine using PyVista (VTK/OpenGL backend).
 
-    This class provides GPU-accelerated rendering for nodal field data, supporting
-    both single-sequence animations and side-by-side ground truth comparisons.
+    Features:
+    - Off-screen GPU rendering via VTK + EGL (NVIDIA headless servers)
+    - log₁₀(P) colormap for high-pressure-ratio (10000:1) flows
+    - Percentile-clipped (2 %–98 %) color limits: reveals small variations
+      in near-constant fields such as temperature
+    - Diverging colormap (RdBu_r) for velocity channels (zero = white)
+    - Error column uses Reds (strictly non-negative)
+    - No imageio-ffmpeg dependency: encodes via system ffmpeg subprocess
+
+    Notes:
+        - For MP4 output, system ffmpeg must be on PATH (or set FFMPEG_EXE env var).
+        - For GIF output, PIL/Pillow is used (already a PyVista dependency).
     """
 
-    def __init__(self, output_dir: Union[str, Path], spatial_dim: int = 2, fps: int = 30, theme: str = 'document'
-                ) -> None:
-        """
-        Initialize the FlowVis renderer.
+    FFMPEG_EXE: str = os.environ.get('FFMPEG_EXE', 'ffmpeg')
 
+    def __init__(
+        self,
+        output_dir: Union[str, Path],
+        spatial_dim: int = 2,
+        fps: int = 30,
+        theme: str = 'document',
+        window_width: int = 2400,
+        subplot_height: int = 250,
+    ) -> None:
+        """
         Args:
-            output_dir (Union[str, Path]): Directory to save rendered animations.
-            spatial_dim (int): Spatial dimensionality of data (2 or 3).
-            fps (int): Frames per second for output video.
-            theme (str): PyVista plotting theme ('document', 'paraview', 'dark').
+            output_dir:     Directory to save rendered animations.
+            spatial_dim:    Spatial dimensionality (2 or 3).
+            fps:            Frames per second for output video.
+            theme:          PyVista theme ('document', 'paraview', 'dark').
+            window_width:   Total window width in pixels (for comparison layout).
+            subplot_height: Pixel height per channel row.
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.spatial_dim = spatial_dim
         self.fps = fps
+        self.p_idx = spatial_dim        # pressure channel index
+        self.window_width = window_width
+        self.subplot_height = subplot_height
 
-        # set visualization theme (affects background color, fonts, etc.)
         pv.set_plot_theme(theme)
 
-        # define standard field labels
         if spatial_dim == 2:
-            self.labels: List[str] = ['Vx', 'Vy', 'P', 'T']
+            self.ch_names: List[str] = ['Vx', 'Vy', 'P', 'T']
         elif spatial_dim == 3:
-            self.labels: List[str] = ['Vx', 'Vy', 'Vz', 'P', 'T']
+            self.ch_names: List[str] = ['Vx', 'Vy', 'Vz', 'P', 'T']
         else:
-            self.labels = [f'Field_{i}' for i in range(spatial_dim + 2)]
+            self.ch_names = [f'Field_{i}' for i in range(spatial_dim + 2)]
 
-    def _prepare_mesh(self, coords: Tensor) -> pv.PolyData:
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _prepare_points(self, coords: Tensor) -> np.ndarray:
         """
-        Converts coordinate tensor into a PyVista PolyData object.
+        Convert coordinate tensor to (N, 3) float32 array for VTK.
+        Pads Z = 0 for 2-D data.
 
         Args:
-            coords (Tensor): Spatial coordinates. Shape: (num_nodes, spatial_dim)
+            coords: (N, spatial_dim)
 
         Returns:
-            pv.PolyData: The VTK point cloud object ready for rendering.
+            (N, 3) float32 numpy array.
         """
-        coords_np = coords.detach().cpu().numpy()
-        
-        # VTK requires 3D points. If 2D, pad Z-axis with zeros.
+        pts = coords.detach().cpu().numpy().astype(np.float32)
         if self.spatial_dim == 2:
-            num_nodes = coords_np.shape[0]
-            zeros = np.zeros((num_nodes, 1), dtype=coords_np.dtype)
-            points = np.hstack([coords_np, zeros])
-        else:
-            points = coords_np
+            pts = np.hstack([pts, np.zeros((pts.shape[0], 1), dtype=np.float32)])
+        return pts
 
-        return pv.PolyData(points)
+    def _preprocess(self, data: np.ndarray, ch_idx: int) -> np.ndarray:
+        """
+        Apply channel-specific visualization transform.
+
+        Pressure: log₁₀(clip(P, 1.0)) — compresses 10000:1 dynamic range.
+        Others:   identity.
+
+        Args:
+            data:   Array of any shape for a single channel.
+            ch_idx: Channel index.
+
+        Returns:
+            Transformed array (same shape as input).
+        """
+        if ch_idx == self.p_idx:
+            return np.log10(np.clip(data, 1.0, None))
+        return data
 
     def _get_clim(self, data: np.ndarray) -> Tuple[float, float]:
         """
-        Computes the global min and max for consistent color scaling.
-        
+        Percentile-clipped color limits from a full temporal stack.
+
+        Uses 2nd–98th percentile so near-constant fields (e.g. temperature
+        with ±0.3 K variation) still produce a meaningful color gradient.
+
         Args:
-            data (np.ndarray): The full temporal sequence for a specific channel.
-                               Shape: (seq_len, num_nodes)
-        
+            data: Array of any shape (will be raveled).
+
         Returns:
-            Tuple[float, float]: (min_val, max_val)
+            (vmin, vmax) float tuple.
         """
-        return float(np.min(data)), float(np.max(data))
+        flat = data.ravel()
+        lo = float(np.percentile(flat, 2))
+        hi = float(np.percentile(flat, 98))
+        if abs(hi - lo) < 1e-9:          # truly constant field: add tiny epsilon
+            center = (lo + hi) * 0.5
+            lo, hi = center - 1e-6, center + 1e-6
+        return lo, hi
+
+    def _channel_cmap(self, ch_idx: int) -> str:
+        """Colormap string for a given channel (not error column)."""
+        return _CMAP[_channel_role(ch_idx, self.spatial_dim)]
+
+    def _scalar_bar_title(self, ch_idx: int, col: int) -> str:
+        """
+        Scalar bar label for (channel_index, column).
+        col: 0 = GT / single, 1 = Pred, 2 = Abs Error.
+        """
+        name = self.ch_names[ch_idx] if ch_idx < len(self.ch_names) else f'Ch{ch_idx}'
+        if col == 2:
+            # Error is always in physical units (Pa for pressure, not log₁₀)
+            suffix = ' (Pa)' if ch_idx == self.p_idx else ''
+            return f'|\u0394{name}|{suffix}'
+        if ch_idx == self.p_idx:
+            return 'P (log\u2081\u2080 Pa)'   # P (log₁₀ Pa)
+        return name
+
+    def _setup_camera(self, plotter: pv.Plotter) -> None:
+        """Fix camera view for the active subplot."""
+        if self.spatial_dim == 2:
+            plotter.view_xy()
+        else:
+            plotter.view_isometric()
+        plotter.reset_camera()
+
+    def _encode_mp4(
+        self,
+        plotter: pv.Plotter,
+        update_fn,
+        seq_len: int,
+        out_path: Path,
+        desc: str,
+    ) -> None:
+        """
+        Capture frames via plotter.screenshot() and encode to MP4 using
+        system ffmpeg (stdin raw-video pipe). No imageio-ffmpeg dependency.
+
+        Args:
+            plotter:   Configured PyVista Plotter (off_screen=True).
+            update_fn: Callable(t: int) — updates all mesh point_data for frame t.
+            seq_len:   Total number of frames.
+            out_path:  Output .mp4 path.
+            desc:      tqdm progress bar description.
+        """
+        # First frame is already in the mesh (set during plotter setup).
+        # Capture it to detect the actual pixel dimensions.
+        first_frame = plotter.screenshot(return_img=True)  # (H, W, 3) uint8
+        H, W = first_frame.shape[:2]
+
+        # Ensure even dimensions (libx264 requirement)
+        W_enc = W + (W % 2)
+        H_enc = H + (H % 2)
+
+        ffmpeg_cmd = [
+            self.FFMPEG_EXE, '-y',
+            '-framerate', str(self.fps),
+            '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{W}x{H}',
+            '-i', 'pipe:0',
+            '-vf', f'pad={W_enc}:{H_enc}:0:0',
+            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '22',
+            str(out_path),
+        ]
+        proc = subprocess.Popen(
+            ffmpeg_cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+
+        proc.stdin.write(first_frame.tobytes())
+        for t in tqdm(range(1, seq_len), desc=desc, leave=False):
+            update_fn(t)
+            plotter.render()
+            proc.stdin.write(plotter.screenshot(return_img=True).tobytes())
+
+        proc.stdin.close()
+        proc.wait()
+        plotter.close()
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg exited with code {proc.returncode}. "
+                f"Ensure ffmpeg is on PATH or set FFMPEG_EXE env var."
+            )
+
+    def _encode_gif(
+        self,
+        plotter: pv.Plotter,
+        update_fn,
+        seq_len: int,
+        out_path: Path,
+        desc: str,
+    ) -> None:
+        """
+        Capture frames and write to GIF via imageio (uses PIL, no ffmpeg needed).
+
+        Args:
+            plotter:   Configured PyVista Plotter (off_screen=True).
+            update_fn: Callable(t: int) — updates all mesh point_data for frame t.
+            seq_len:   Total number of frames.
+            out_path:  Output .gif path.
+            desc:      tqdm progress bar description.
+        """
+        import imageio
+        frames: List[np.ndarray] = []
+        for t in tqdm(range(seq_len), desc=desc, leave=False):
+            update_fn(t)
+            plotter.render()
+            frames.append(plotter.screenshot(return_img=True))
+        plotter.close()
+        imageio.mimwrite(str(out_path), frames, fps=self.fps, loop=0)
+
+    def _animate(
+        self,
+        plotter: pv.Plotter,
+        update_fn,
+        seq_len: int,
+        out_path: Path,
+        file_format: str,
+        desc: str,
+    ) -> None:
+        """Dispatch to the right encoder based on file_format."""
+        if file_format == 'mp4':
+            self._encode_mp4(plotter, update_fn, seq_len, out_path, desc)
+        elif file_format == 'gif':
+            self._encode_gif(plotter, update_fn, seq_len, out_path, desc)
+        else:
+            raise ValueError(f"Unsupported format '{file_format}'. Use 'mp4' or 'gif'.")
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
 
     def animate_sequence(
-        self, 
-        sequence: Tensor, 
-        coords: Tensor, 
+        self,
+        sequence: Tensor,
+        coords: Tensor,
         case_name: str,
-        point_size: int = 5
+        file_format: str = 'mp4',
+        point_size: int = 5,
     ) -> None:
         """
-        Renders a single CFD sequence animation using PyVista.
+        Render a single-sequence animation.
 
         Args:
-            sequence (Tensor): Temporal field data. 
-                               Shape: (seq_len, num_nodes, num_channels)
-            coords (Tensor): Spatial coordinates of nodes. 
-                             Shape: (num_nodes, spatial_dim)
-            case_name (str): Identifier for the output filename.
-            point_size (int): visual size of the render points.
+            sequence:    (seq_len, N, C) field data in physical units.
+            coords:      (N, spatial_dim) node coordinates.
+            case_name:   Output filename prefix.
+            file_format: 'mp4' or 'gif'.
+            point_size:  Rendered point size in pixels.
         """
-        seq_len, num_nodes, num_channels = sequence.shape
+        seq_len, _, num_channels = sequence.shape
         seq_np = sequence.detach().cpu().numpy()
-        
-        # Initialize mesh
-        mesh = self._prepare_mesh(coords)
-        
-        # Setup Plotter: One row per channel
+        points = self._prepare_points(coords)
+
+        # Apply per-channel transforms; compute color limits from full stack.
+        seq_vis = np.stack(
+            [self._preprocess(seq_np[:, :, c], c) for c in range(num_channels)],
+            axis=-1,
+        )  # (seq_len, N, C)
+        clims = [self._get_clim(seq_vis[:, :, c]) for c in range(num_channels)]
+        for c in range(num_channels):
+            if _channel_role(c, self.spatial_dim) == 'velocity':
+                lo, hi = clims[c]
+                vmax = max(abs(lo), abs(hi))
+                clims[c] = (-vmax, vmax)
+
         plotter = pv.Plotter(
-            shape=(num_channels, 1), 
-            off_screen=True, 
-            window_size=(800, 300 * num_channels)
+            shape=(num_channels, 1),
+            off_screen=True,
+            window_size=(self.window_width // 3, self.subplot_height * num_channels),
         )
 
-        # Initialize actors and color ranges
-        actors = []
-        clims = []
-        
-        for i in range(num_channels):
-            plotter.subplot(i, 0)
-            data_channel = seq_np[:, :, i]
-            clim = self._get_clim(data_channel)
-            clims.append(clim)
-            
-            # Assign initial frame data
-            mesh_copy = mesh.copy()
-            mesh_copy.point_data['values'] = seq_np[0, :, i]
-            
-            actor = plotter.add_mesh(
-                mesh_copy,
-                scalars='values',
-                cmap='viridis',
-                clim=clim,
+        meshes: List[pv.PolyData] = []
+        for c in range(num_channels):
+            plotter.subplot(c, 0)
+            mesh = pv.PolyData(points)
+            mesh.point_data['scalar'] = seq_vis[0, :, c].astype(np.float32)
+            plotter.add_mesh(
+                mesh, scalars='scalar',
+                cmap=self._channel_cmap(c),
+                clim=clims[c],
                 point_size=point_size,
-                render_points_as_spheres=True,
-                scalar_bar_args={'title': self.labels[i]}
+                render_points_as_spheres=False,
+                scalar_bar_args={'title': self._scalar_bar_title(c, 0)},
             )
-            actors.append(mesh_copy)
-            
-            if self.spatial_dim == 2:
-                plotter.view_xy()
-            plotter.add_text(f"Field: {self.labels[i]}", font_size=10)
+            plotter.add_text(
+                f'Field: {self.ch_names[c]}', font_size=10, position='upper_edge',
+            )
+            self._setup_camera(plotter)
+            meshes.append(mesh)
 
-        # Open Movie File
-        filename = self.output_dir / f"{case_name}_seq.mp4"
-        plotter.open_movie(str(filename), framerate=self.fps)
-        
-        logger.info(f"Rendering sequence: {case_name} -> {filename}")
-        
-        # Animation Loop
-        for t in tqdm(range(seq_len), desc=f"Rendering {case_name}", leave=False):
-            for i in range(num_channels):
-                # Efficient in-place update of point data
-                actors[i].point_data['values'] = seq_np[t, :, i]
-            
-            plotter.write_frame()
+        def _update(t: int) -> None:
+            for c, mesh in enumerate(meshes):
+                mesh.point_data['scalar'] = seq_vis[t, :, c].astype(np.float32)
 
-        plotter.close()
+        out_path = self.output_dir / f'{case_name}_seq.{file_format}'
+        self._animate(plotter, _update, seq_len, out_path, file_format,
+                      desc=f'Rendering {case_name}')
+        logger.info(f'sequence animation saved to {hue.g}{out_path}{hue.q}')
 
     def animate_comparison(
-        self, 
-        gt: Tensor, 
-        pred: Tensor, 
-        coords: Tensor, 
+        self,
+        gt: Tensor,
+        pred: Tensor,
+        coords: Tensor,
         case_name: str,
-        point_size: int = 5
+        file_format: str = 'mp4',
+        point_size: int = 5,
     ) -> None:
         """
-        Renders a side-by-side comparison (GT, Pred, Error) animation.
+        Render Ground Truth / Prediction / Abs Error comparison animation.
+
+        Layout: num_channels rows × 3 columns.
+        GT and Pred share the same color limits; Error has its own.
+        Pressure is shown in log₁₀(Pa) in GT/Pred columns and in raw Pa in
+        the Error column (absolute residual preserves physical interpretation).
 
         Args:
-            gt (Tensor): Ground truth data. 
-                         Shape: (seq_len, num_nodes, num_channels)
-            pred (Tensor): Predicted data. 
-                           Shape: (seq_len, num_nodes, num_channels)
-            coords (Tensor): Spatial coordinates. 
-                             Shape: (num_nodes, spatial_dim)
-            case_name (str): Identifier for the output filename.
-            point_size (int): visual size of the render points.
+            gt:          (seq_len, N, C) ground truth in physical units.
+            pred:        (seq_len, N, C) prediction in physical units.
+            coords:      (N, spatial_dim) node coordinates.
+            case_name:   Output filename prefix.
+            file_format: 'mp4' or 'gif'.
+            point_size:  Rendered point size in pixels.
         """
-        seq_len, num_nodes, num_channels = gt.shape
-        error = torch.abs(gt - pred)
-        
-        # Convert to numpy once
-        gt_np = gt.detach().cpu().numpy()
+        seq_len, _, num_channels = gt.shape
+        err = torch.abs(gt - pred)
+
+        gt_np   = gt.detach().cpu().numpy()
         pred_np = pred.detach().cpu().numpy()
-        err_np = error.detach().cpu().numpy()
-        
-        mesh = self._prepare_mesh(coords)
-        
-        # Setup Plotter: Grid of (num_channels x 3)
-        # Columns: Ground Truth | Prediction | Absolute Error
-        plotter = pv.Plotter(
-            shape=(num_channels, 3), 
-            off_screen=True, 
-            window_size=(1200, 300 * num_channels)
+        err_np  = err.detach().cpu().numpy()
+        points  = self._prepare_points(coords)
+
+        # Log₁₀(P) applied to GT/Pred only; error stays in physical units (Pa).
+        gt_vis   = np.stack(
+            [self._preprocess(gt_np[:, :, c],   c) for c in range(num_channels)], axis=-1,
         )
-        
-        column_titles = ["Ground Truth", "Prediction", "Abs Error"]
-        meshes_grid = [] # Stores (channel, column) mesh references
-        
-        for c in range(num_channels):
-            channel_meshes = []
-            
-            # Determine color limits
-            # GT and Pred share the same clim for visual consistency
-            # Error gets its own clim (usually 0 to max_error)
-            val_clim = (
-                min(self._get_clim(gt_np[:, :, c])[0], self._get_clim(pred_np[:, :, c])[0]),
-                max(self._get_clim(gt_np[:, :, c])[1], self._get_clim(pred_np[:, :, c])[1])
+        pred_vis = np.stack(
+            [self._preprocess(pred_np[:, :, c], c) for c in range(num_channels)], axis=-1,
+        )
+
+        # GT + Pred share one range; error gets its own.
+        val_clims = [
+            self._get_clim(
+                np.concatenate([gt_vis[:, :, c].ravel(), pred_vis[:, :, c].ravel()])
             )
-            err_clim = self._get_clim(err_np[:, :, c])
-            
-            data_sources = [gt_np, pred_np, err_np]
-            
+            for c in range(num_channels)
+        ]
+        for c in range(num_channels):
+            if _channel_role(c, self.spatial_dim) == 'velocity':
+                lo, hi = val_clims[c]
+                vmax = max(abs(lo), abs(hi))
+                val_clims[c] = (-vmax, vmax)
+        err_clims = [self._get_clim(err_np[:, :, c]) for c in range(num_channels)]
+
+        plotter = pv.Plotter(
+            shape=(num_channels, 3),
+            off_screen=True,
+            window_size=(self.window_width, self.subplot_height * num_channels),
+        )
+
+        col_titles = ['Ground Truth', 'Prediction', 'Abs Error']
+        meshes: List[List[pv.PolyData]] = []  # meshes[channel][col]
+
+        for c in range(num_channels):
+            srcs  = [gt_vis,       pred_vis,       err_np]
+            clims = [val_clims[c], val_clims[c],   err_clims[c]]
+            cmaps = [self._channel_cmap(c), self._channel_cmap(c), _CMAP['error']]
+
+            row: List[pv.PolyData] = []
             for col in range(3):
                 plotter.subplot(c, col)
-                
-                mesh_copy = mesh.copy()
-                mesh_copy.point_data['values'] = data_sources[col][0, :, c]
-                
-                is_error_col = (col == 2)
-                cmap = 'RdBu_r' if is_error_col else 'viridis'
-                clim = err_clim if is_error_col else val_clim
-                
+                mesh = pv.PolyData(points)
+                mesh.point_data['scalar'] = srcs[col][0, :, c].astype(np.float32)
                 plotter.add_mesh(
-                    mesh_copy,
-                    scalars='values',
-                    cmap=cmap,
-                    clim=clim,
+                    mesh, scalars='scalar',
+                    cmap=cmaps[col],
+                    clim=clims[col],
                     point_size=point_size,
-                    render_points_as_spheres=True,
-                    scalar_bar_args={'title': f"{self.labels[c]} ({column_titles[col]})"}
+                    render_points_as_spheres=False,
+                    scalar_bar_args={'title': self._scalar_bar_title(c, col)},
                 )
-                
-                if self.spatial_dim == 2:
-                    plotter.view_xy()
-                
                 if c == 0:
-                    plotter.add_text(column_titles[col], font_size=12, position='upper_left')
-                
-                channel_meshes.append(mesh_copy)
-            
-            meshes_grid.append(channel_meshes)
+                    plotter.add_text(col_titles[col], font_size=11, position='upper_edge')
+                self._setup_camera(plotter)
+                row.append(mesh)
 
-        # Open Movie File
-        filename = self.output_dir / f"{case_name}_comp.mp4"
-        plotter.open_movie(str(filename), framerate=self.fps)
-        
-        logger.info(f"Rendering comparison: {case_name} -> {filename}")
-        
-        # Animation Loop
-        for t in tqdm(range(seq_len), desc=f"Rendering {case_name}", leave=False):
+            meshes.append(row)
+
+        def _update(t: int) -> None:
             for c in range(num_channels):
-                # Update GT
-                meshes_grid[c][0].point_data['values'] = gt_np[t, :, c]
-                # Update Pred
-                meshes_grid[c][1].point_data['values'] = pred_np[t, :, c]
-                # Update Error
-                meshes_grid[c][2].point_data['values'] = err_np[t, :, c]
-            
-            plotter.write_frame()
-            
-        plotter.close()
+                meshes[c][0].point_data['scalar'] = gt_vis[t, :, c].astype(np.float32)
+                meshes[c][1].point_data['scalar'] = pred_vis[t, :, c].astype(np.float32)
+                meshes[c][2].point_data['scalar'] = err_np[t, :, c].astype(np.float32)
 
-if __name__ == "__main__":
-    # Validation / Example Usage
+        out_path = self.output_dir / f'{case_name}_comp.{file_format}'
+        self._animate(plotter, _update, seq_len, out_path, file_format,
+                      desc=f'Rendering {case_name}')
+        logger.info(f'comparison animation saved to {hue.g}{out_path}{hue.q}')
 
-    # 1. Mock Data Generation
+
+if __name__ == '__main__':
+    # Smoke test with synthetic data
     spatial_dim = 2
-    T, N, C = 40, 2000, spatial_dim + 2 # (seq_len, num_nodes, num_channels)
+    T, N, C = 20, 2000, spatial_dim + 2
 
-    logger.info("Generating mock data...")
+    logger.info('Generating mock data...')
     mock_coords = torch.rand(N, spatial_dim)
-    # Create a moving wave pattern
-    time_steps = torch.linspace(0, 4*np.pi, T).view(T, 1, 1)
-    mock_seq = torch.sin(time_steps + mock_coords[:, 0] * 5) * torch.cos(mock_coords[:, 1] * 5)
-    # Expand to C channels with slight variations
-    mock_seq = mock_seq.repeat(1, 1, C) * torch.arange(1, C+1).view(1, 1, C)
 
-    mock_pred = mock_seq * 0.9 + torch.randn_like(mock_seq) * 0.1
+    time_steps = torch.linspace(0, 4 * np.pi, T).view(T, 1, 1)
+    wave = torch.sin(time_steps + mock_coords[:, 0].view(1, N, 1) * 5)
+    mock_seq = wave.expand(T, N, C).clone()
+    mock_seq[:, :, spatial_dim] = torch.rand(T, N) * 4e6 + 5e5   # P: 500 kPa – 4.5 MPa
+    mock_seq[:, :, spatial_dim + 1] = 300.0 + torch.randn(T, N) * 0.5  # T: near-constant
 
-    # 2. Instantiate FlowVis
-    vis = FlowVis(output_dir='vis_outputs', spatial_dim=spatial_dim, fps=20)
+    mock_pred = mock_seq * 0.95 + torch.randn_like(mock_seq) * 0.05
 
-    # 3. Render Sequence
-    vis.animate_sequence(mock_seq, mock_coords, case_name='demo_flow')
-
-    # 4. Render Comparison
-    vis.animate_comparison(mock_seq, mock_pred, mock_coords, case_name='demo_flow')
+    vis = FlowVis(output_dir='vis_outputs', spatial_dim=spatial_dim, fps=10)
+    vis.animate_sequence(mock_seq, mock_coords, case_name='demo_seq')
+    vis.animate_comparison(mock_seq, mock_pred, mock_coords, case_name='demo_comp')
