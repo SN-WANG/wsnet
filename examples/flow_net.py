@@ -12,7 +12,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from typing import Dict, Tuple
 
-import flow_args
+import args_flow
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if project_root not in sys.path: sys.path.insert(0, project_root)
@@ -191,11 +191,11 @@ def train_pipeline(args: argparse.Namespace) -> None:
         noise_std_init=args.noise_std_init, noise_decay=args.noise_decay,
         # physics params
         use_physics_loss=args.use_physics_loss,
-        lambda_phyiscs=args.lambda_phyiscs,
+        lambda_phyiscs=args.lambda_physics,
         lambda_mass=args.lambda_mass,
         lambda_momentum=args.lambda_momentum,
         lambda_energy=args.lambda_energy,
-        physics_grid_size=args.latent_grid_size,
+        latent_grid_size=args.latent_grid_size,
     )
 
     trainer.fit(train_loader, val_loader)
@@ -358,8 +358,13 @@ def probe_pipeline(args: argparse.Namespace) -> None:
     model = _build_model(args)
     model.to(device).train()
 
-    logger.info(f"probe config: batch={B}, frames={T}, nodes={N}, channels={C}, "
-                f"max_rollout={args.max_rollout_steps}, model={args.model_type}")
+    logger.info(f"{hue.y}probe config:{hue.q} "
+                f"batch={hue.m}{B}{hue.q}, "
+                f"frames={hue.m}{T}{hue.q}, "
+                f"nodes={hue.m}{N}{hue.q}, "
+                f"channels={hue.m}{C}{hue.q}, "
+                f"max_rollout={hue.m}{args.max_rollout_steps}{hue.q}, "
+                f"model={hue.b}{args.model_type}{hue.q}")
 
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     criterion = NMSECriterion()
@@ -384,14 +389,18 @@ def probe_pipeline(args: argparse.Namespace) -> None:
     total = torch.cuda.get_device_properties(device).total_memory
     pct   = 100 * peak / total
     if pct < 75:
-        status = "SAFE"
+        status = f"{hue.g}SAFE{hue.q}"
     elif pct < 92:
-        status = "WARNING — close to limit"
+        status = f"{hue.y}WARNING — close to limit{hue.q}"
     else:
-        status = "CRITICAL — likely OOM in real training"
+        status = f"{hue.r}CRITICAL — likely OOM in real training{hue.q}"
 
-    logger.info(f"Device : {torch.cuda.get_device_name(device)}  ({total / 1e9:.1f} GB)")
-    logger.info(f"Peak   : {peak / 1e9:.2f} GB  ({pct:.1f}%)  →  {status}")
+    logger.info(f"{hue.y}device: {hue.b}{torch.cuda.get_device_name(device)}{hue.q}  "
+                f"({hue.m}{total / 1e9:.1f}{hue.q} GB)")
+    logger.info(f"peak usage: {hue.m}{peak / 1e9:.2f}{hue.q} GB  "
+                f"({hue.m}{pct:.1f}{hue.q} %)  →  {status}")
+
+    logger.info(f"{hue.g}probe completed.{hue.q}\n")
 
 
 # ======================================================================
@@ -399,7 +408,7 @@ def probe_pipeline(args: argparse.Namespace) -> None:
 # ======================================================================
 
 if __name__ == "__main__":
-    args = flow_args.get_args()
+    args = args_flow.get_args()
 
     if "probe" in args.mode:  probe_pipeline(args)
     if "train" in args.mode:  train_pipeline(args)
