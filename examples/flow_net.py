@@ -191,7 +191,7 @@ def train_pipeline(args: argparse.Namespace) -> None:
         noise_std_init=args.noise_std_init, noise_decay=args.noise_decay,
         # physics params
         use_physics_loss=args.use_physics_loss,
-        lambda_phyiscs=args.lambda_physics,
+        lambda_physics=args.lambda_physics,
         lambda_mass=args.lambda_mass,
         lambda_momentum=args.lambda_momentum,
         lambda_energy=args.lambda_energy,

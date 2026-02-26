@@ -34,9 +34,13 @@ class BaseCriterion(nn.Module):
 
 
 class NMSECriterion(BaseCriterion):
-    """Normalized Mean Squared Error loss.
+    """Per-channel Normalized Mean Squared Error loss.
 
-    Computes: L = ||target - pred||^2 / (||target||^2 + eps)
+    Computes per-channel NMSE and sums across channels:
+        L = sum_c ||target_c - pred_c||^2 / (||target_c||^2 + eps)
+
+    Each channel is independently normalized by its own energy, preventing
+    high-energy channels from dominating the gradient signal.
     """
 
     def __init__(self, eps: float = 1e-8):
@@ -47,9 +51,12 @@ class NMSECriterion(BaseCriterion):
         if pred.shape != target.shape:
             raise ValueError(f"Shape mismatch: pred {pred.shape} vs target {target.shape}")
 
-        mse = torch.sum((target - pred) ** 2)
-        norm = torch.sum(target ** 2) + self.eps
-        return mse / norm
+        C = pred.shape[-1]
+        # Flatten all non-channel dims: (*dims, C) -> (N_total, C)
+        sq_err = (target - pred) ** 2
+        mse_c = sq_err.reshape(-1, C).sum(0)              # (C,)
+        norm_c = (target ** 2).reshape(-1, C).sum(0) + self.eps  # (C,)
+        return (mse_c / norm_c).sum()
 
 
 class Metrics:

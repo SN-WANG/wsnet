@@ -44,20 +44,17 @@ def get_args() -> argparse.Namespace:
                         help="Number of subprocesses for data loading.")
 
     # Preprocessing
-    parser.add_argument("--use_log_pressure", type=bool, default=False,
+    parser.add_argument("--use_log_pressure", type=bool, default=True,
                         help="Apply log1p(p / 1e5) to pressure channel before standardization. "
                              "Recommended for high-pressure-ratio (10000:1) data.")
 
     # ----------------------------------------------------------------------
-    # 3. Model Selection
+    # 3. Model Architecture
     # ----------------------------------------------------------------------
     parser.add_argument("--model_type", type=str, default="geowno",
                         choices=["geofno", "geowno"],
                         help="Neural operator architecture: GeoFNO (Fourier) or GeoWNO (Haar Wavelet).")
 
-    # ----------------------------------------------------------------------
-    # 4. Model Architecture
-    # ----------------------------------------------------------------------
     parser.add_argument("--modes", type=int, nargs='+', default=[12, 12],
                         help="Number of Fourier/wavelet modes per dimension "
                              "(GeoFNO: truncation; GeoWNO: dim indicator).")
@@ -88,7 +85,7 @@ def get_args() -> argparse.Namespace:
                              "(1.0 = ~0.5 cycles across domain, survives KNN-IDW averaging).")
 
     # ----------------------------------------------------------------------
-    # 5. Training Strategy
+    # 4. Training Strategy
     # ----------------------------------------------------------------------
 
     # optimizer (AdamW)

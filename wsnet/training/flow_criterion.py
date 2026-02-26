@@ -139,7 +139,7 @@ class FlowCriterion(BaseCriterion):
     """
     Physics-informed loss for compressible flow (FD-based, no autograd).
 
-    Total loss = NMSE(pred, target) + lambda_phyiscs * L_physics
+    Total loss = NMSE(pred, target) + lambda_physics * L_physics
 
     Physics residuals are computed in normalized feature space via finite differences
     on a scatter-projected regular grid. Zero-residual is scale-invariant, so working
@@ -155,7 +155,7 @@ class FlowCriterion(BaseCriterion):
         - Energy proxy:   ∂T/∂t ≈ 0
 
     Args:
-        lambda_phyiscs:      Weight of physics loss relative to data (NMSE) loss.
+        lambda_physics:      Weight of physics loss relative to data (NMSE) loss.
         lambda_mass:     Sub-weight for mass residual.
         lambda_momentum: Sub-weight for momentum residual.
         lambda_energy:   Sub-weight for energy residual.
@@ -164,7 +164,7 @@ class FlowCriterion(BaseCriterion):
 
     def __init__(
         self,
-        lambda_phyiscs: float = 0.1,
+        lambda_physics: float = 0.1,
         lambda_mass: float = 1.0,
         lambda_momentum: float = 1.0,
         lambda_energy: float = 1.0,
@@ -172,10 +172,10 @@ class FlowCriterion(BaseCriterion):
     ):
         super().__init__()
 
-        if any(v < 0 for v in (lambda_phyiscs, lambda_mass, lambda_momentum, lambda_energy)):
+        if any(v < 0 for v in (lambda_physics, lambda_mass, lambda_momentum, lambda_energy)):
             raise ValueError("All lambda weights must be non-negative")
 
-        self.lambda_phyiscs = lambda_phyiscs
+        self.lambda_physics = lambda_physics
         self.lambda_mass = lambda_mass
         self.lambda_momentum = lambda_momentum
         self.lambda_energy = lambda_energy
@@ -239,7 +239,7 @@ class FlowCriterion(BaseCriterion):
         **kwargs,
     ) -> Tensor:
         """
-        Compute total loss = NMSE + lambda_phyiscs * physics_loss.
+        Compute total loss = NMSE + lambda_physics * physics_loss.
 
         Args:
             pred:             Predicted state. Shape (B, N, C).
@@ -264,6 +264,6 @@ class FlowCriterion(BaseCriterion):
         # Physics loss (only when all required inputs are present)
         if prev is not None and coords is not None and latent_grid_size is not None:
             phy_loss = self._physics_loss(pred, prev, coords, latent_grid_size, dt)
-            return data_loss + self.lambda_phyiscs * phy_loss
+            return data_loss + self.lambda_physics * phy_loss
 
         return data_loss

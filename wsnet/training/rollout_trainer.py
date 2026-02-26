@@ -40,7 +40,7 @@ class RolloutTrainer(BaseTrainer):
                  noise_std_init: float = 0.05, noise_decay: float = 0.9,
                  # physics params
                  use_physics_loss: bool = False,
-                 lambda_phyiscs: float = 0.1,
+                 lambda_physics: float = 0.1,
                  lambda_mass: float = 1.0, lambda_momentum: float = 1.0, lambda_energy: float = 1.0,
                  latent_grid_size: Any = None,
                  # base params
@@ -55,7 +55,7 @@ class RolloutTrainer(BaseTrainer):
             noise_std_init (float): Initial noise injection std dev.
             noise_decay (float): Multiplier for noise when curriculum advances.
             use_physics_loss (bool): Whether to use physics-informed loss.
-            lambda_phyiscs (float): Weight of physics loss vs data loss.
+            lambda_physics (float): Weight of physics loss vs data loss.
             lambda_mass (float): Sub-weight for mass conservation residual.
             lambda_momentum (float): Sub-weight for momentum conservation residual.
             lambda_energy (float): Sub-weight for energy conservation residual.
@@ -80,7 +80,7 @@ class RolloutTrainer(BaseTrainer):
         if criterion is None:
             if use_physics_loss:
                 criterion = FlowCriterion(
-                    lambda_phyiscs=lambda_phyiscs,
+                    lambda_physics=lambda_physics,
                     lambda_mass=lambda_mass,
                     lambda_momentum=lambda_momentum,
                     lambda_energy=lambda_energy
