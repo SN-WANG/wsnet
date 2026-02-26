@@ -18,15 +18,6 @@ class MICOInfill:
     pool by maximising mutual information between selected and unobserved locations,
     leveraging multi-fidelity covariance structure derived from co-kriging.
 
-    Interface mirrors :class:`~wsnet.sampling.infill.Infill`: construct once per
-    iteration, call ``propose()`` to obtain one new point (coordinates), then rebuild
-    with updated data for the next iteration.
-
-    Reference:
-        Wang et al. (2024). Optimal sensor placement for digital twin based on
-        mutual information and correlation with multi-fidelity data.
-        Engineering with Computers, 40, 1289–1308.
-
     Attributes:
         model (KRG): Pre-trained Kriging model on HF data.
         x_hf (np.ndarray): HF training locations, shape (num_hf, input_dim).

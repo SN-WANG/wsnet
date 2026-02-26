@@ -27,6 +27,7 @@ from wsnet.models.multi_fidelity.cca_mfs import CCAMFS
 # Sequential Sampling Methods
 from wsnet.sampling.infill import Infill
 from wsnet.sampling.mico_infill import MICOInfill
+from wsnet.sampling.mo_infill import MOInfill
 
 # Optimization Methods
 from wsnet.models.optimization.dragonfly import dragonfly_optimize
@@ -378,7 +379,54 @@ if __name__ == "__main__":
     evaluate_metrics(y_test, y_pred_krg_mico, "KRG + MICOInfill")
 
     # ------------------------------------------------------------------
-    # 10. Global Optimization on Surrogate Surface
+    # 10. Model H: KRG + MOInfill (Constrained Many-Objective IS-EHVI)
+    # ------------------------------------------------------------------
+    logger.info(f"{hue.b}>>> Model H: KRG with MOInfill (Constrained IS-EHVI){hue.q}")
+
+    obj_indices        = [0, 1]   # weight, displacement → minimize
+    constraint_indices = [2, 3]   # stress_skin, stress_stiff → constrain
+    constraint_ubs = np.array([
+        np.percentile(y_train[:, 2], 90),   # stress_skin upper bound
+        np.percentile(y_train[:, 3], 90),   # stress_stiff upper bound
+    ])
+
+    x_mo = np.copy(x_train)
+    y_mo = np.copy(y_train)
+    model_krg_mo = KRG()
+    model_krg_mo.fit(x_mo, y_mo)
+
+    for i in range(num_infill):
+        mo_strategy = MOInfill(
+            model=model_krg_mo, bounds=bounds, y_train=y_mo,
+            obj_indices=obj_indices,
+            constraint_indices=constraint_indices,
+            constraint_ubs=constraint_ubs,
+        )
+        x_new = mo_strategy.propose()        # (1, num_features)
+        y_new_val = AbaqusModel(fidelity="high").run(x_new.flatten())
+        y_new = y_new_val.reshape(1, -1)
+        if np.isnan(y_new).any():
+            logger.info(f"{hue.r}simulation failed (NaN). skipping.{hue.q}")
+            continue
+        x_mo = np.vstack([x_mo, x_new])
+        y_mo = np.vstack([y_mo, y_new])
+        model_krg_mo.fit(x_mo, y_mo)
+        logger.info(f"  iteration {i+1}/{num_infill}: weight={y_new[0,0]:.4f}, disp={y_new[0,1]:.4f}")
+
+    # report Pareto front (objectives only)
+    y_mo_obj = y_mo[:, obj_indices]
+    pf_mask = mo_strategy._compute_pareto_mask(y_mo_obj)
+    y_pf = y_mo_obj[pf_mask]
+    logger.info(f"Pareto front ({pf_mask.sum()} points): weight, displacement")
+    for pt in y_pf:
+        logger.info(f"  weight={pt[0]:.4f}, displacement={pt[1]:.4f}")
+
+    # surrogate accuracy (all outputs)
+    y_pred_krg_mo, _ = model_krg_mo.predict(x_test)
+    evaluate_metrics(y_test, y_pred_krg_mo, "KRG + MOInfill")
+
+    # ------------------------------------------------------------------
+    # 11. Global Optimization on Surrogate Surface
     # ------------------------------------------------------------------
     logger.info(f"{hue.b}>>> Performing Global Optimization{hue.q}")
 
