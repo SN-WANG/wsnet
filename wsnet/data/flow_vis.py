@@ -1,4 +1,4 @@
-# Flow Sequence Visualization — PyVista / GPU-accelerated (replaces CFDRender)
+# Flow Sequence Visualization — PyVista / GPU-accelerated
 # Author: Shengning Wang
 #
 # GPU setup (NVIDIA headless server):
@@ -116,6 +116,64 @@ class FlowVis:
             pts = np.hstack([pts, np.zeros((pts.shape[0], 1), dtype=np.float32)])
         return pts
 
+    def _build_mesh(self, points: np.ndarray) -> pv.PolyData:
+        """
+        Build a Delaunay-triangulated mesh with alpha-shape filtering.
+
+        Alpha is computed automatically as 2.5x the mean nearest-neighbor
+        distance. This removes spurious cross-domain triangles at concave
+        boundaries (e.g. pipe-vessel junctions) while preserving interior
+        coverage.
+
+        Falls back to raw point cloud if Delaunay produces no cells.
+
+        Args:
+            points: (N, 3) float32 array.
+
+        Returns:
+            pv.PolyData with triangulation (or raw points as fallback).
+        """
+        cloud = pv.PolyData(points)
+        try:
+            from scipy.spatial import cKDTree
+            tree = cKDTree(points[:, :self.spatial_dim])
+            dd, _ = tree.query(points[:, :self.spatial_dim], k=2)
+            nn_dists = dd[:, 1]  # distance to nearest neighbor (skip self)
+            alpha = float(np.mean(nn_dists)) * 2.5
+            mesh = cloud.delaunay_2d(alpha=alpha)
+            if mesh.n_cells == 0:
+                logger.warning('delaunay_2d produced 0 cells, falling back to point cloud')
+                return cloud
+            return mesh
+        except Exception as e:
+            logger.warning(f'delaunay_2d failed ({e}), falling back to point cloud')
+            return cloud
+
+    def _compute_window_size(self, points: np.ndarray, num_cols: int,
+                             num_channels: int) -> Tuple[int, int]:
+        """
+        Compute window size that matches the data aspect ratio.
+
+        Args:
+            points:       (N, 3) point coordinates.
+            num_cols:     Number of subplot columns.
+            num_channels: Number of subplot rows (channels).
+
+        Returns:
+            (width, height) in pixels.
+        """
+        x_range = float(points[:, 0].max() - points[:, 0].min()) or 1.0
+        y_range = float(points[:, 1].max() - points[:, 1].min()) or 1.0
+        aspect = x_range / y_range  # data aspect ratio per subplot
+
+        col_width = self.window_width // num_cols
+        subplot_h = max(int(col_width / aspect), 80)
+        # clamp height to reasonable range
+        subplot_h = min(subplot_h, self.subplot_height)
+        subplot_h = max(subplot_h, 80)
+
+        return self.window_width, subplot_h * num_channels
+
     def _preprocess(self, data: np.ndarray, ch_idx: int) -> np.ndarray:
         """
         Apply channel-specific visualization transform.
@@ -173,13 +231,37 @@ class FlowVis:
             return 'P (log\u2081\u2080 Pa)'   # P (log₁₀ Pa)
         return name
 
-    def _setup_camera(self, plotter: pv.Plotter) -> None:
-        """Fix camera view for the active subplot."""
+    def _setup_camera(self, plotter: pv.Plotter, points: np.ndarray = None) -> None:
+        """
+        Fix camera view for the active subplot.
+
+        For 2D data, sets a tight orthographic projection based on the
+        bounding box of the point cloud with minimal padding.
+
+        Args:
+            plotter: Active plotter instance.
+            points:  (N, 3) coordinates for tight framing. If None, uses reset_camera.
+        """
         if self.spatial_dim == 2:
             plotter.view_xy()
+            if points is not None:
+                x_min, x_max = float(points[:, 0].min()), float(points[:, 0].max())
+                y_min, y_max = float(points[:, 1].min()), float(points[:, 1].max())
+                cx = (x_min + x_max) * 0.5
+                cy = (y_min + y_max) * 0.5
+                dx = (x_max - x_min) or 1.0
+                dy = (y_max - y_min) or 1.0
+                # 3% padding
+                pad = max(dx, dy) * 0.03
+                plotter.camera.focal_point = (cx, cy, 0.0)
+                plotter.camera.position = (cx, cy, 1.0)
+                plotter.camera.parallel_scale = max(dx, dy) * 0.5 + pad
+                plotter.camera.parallel_projection = True
+            else:
+                plotter.reset_camera()
         else:
             plotter.view_isometric()
-        plotter.reset_camera()
+            plotter.reset_camera()
 
     def _encode_mp4(
         self,
@@ -307,6 +389,8 @@ class FlowVis:
         seq_len, _, num_channels = sequence.shape
         seq_np = sequence.detach().cpu().numpy()
         points = self._prepare_points(coords)
+        base_mesh = self._build_mesh(points)
+        use_surface = base_mesh.n_cells > 0
 
         # Apply per-channel transforms; compute color limits from full stack.
         seq_vis = np.stack(
@@ -320,29 +404,44 @@ class FlowVis:
                 vmax = max(abs(lo), abs(hi))
                 clims[c] = (-vmax, vmax)
 
+        win_w, win_h = self._compute_window_size(points, 1, num_channels)
+
         plotter = pv.Plotter(
             shape=(num_channels, 1),
             off_screen=True,
-            window_size=(self.window_width // 3, self.subplot_height * num_channels),
+            window_size=(win_w // 3, win_h),
         )
+
+        sbar_args = {
+            'height': 0.15, 'width': 0.6,
+            'position_x': 0.2, 'position_y': 0.01,
+            'vertical': False, 'fmt': '%.2e',
+        }
 
         meshes: List[pv.PolyData] = []
         for c in range(num_channels):
             plotter.subplot(c, 0)
-            mesh = pv.PolyData(points)
+            mesh = base_mesh.copy()
             mesh.point_data['scalar'] = seq_vis[0, :, c].astype(np.float32)
-            plotter.add_mesh(
-                mesh, scalars='scalar',
+
+            add_kw = dict(
+                scalars='scalar',
                 cmap=self._channel_cmap(c),
                 clim=clims[c],
-                point_size=point_size,
-                render_points_as_spheres=False,
-                scalar_bar_args={'title': self._scalar_bar_title(c, 0)},
+                scalar_bar_args={**sbar_args, 'title': self._scalar_bar_title(c, 0)},
             )
+            if use_surface:
+                plotter.add_mesh(mesh, **add_kw)
+            else:
+                plotter.add_mesh(
+                    mesh, **add_kw,
+                    point_size=point_size,
+                    render_points_as_spheres=True,
+                )
             plotter.add_text(
                 f'Field: {self.ch_names[c]}', font_size=10, position='upper_edge',
             )
-            self._setup_camera(plotter)
+            self._setup_camera(plotter, points)
             meshes.append(mesh)
 
         def _update(t: int) -> None:
@@ -366,9 +465,9 @@ class FlowVis:
         """
         Render Ground Truth / Prediction / Abs Error comparison animation.
 
-        Layout: num_channels rows × 3 columns.
+        Layout: num_channels rows x 3 columns.
         GT and Pred share the same color limits; Error has its own.
-        Pressure is shown in log₁₀(Pa) in GT/Pred columns and in raw Pa in
+        Pressure is shown in log10(Pa) in GT/Pred columns and in raw Pa in
         the Error column (absolute residual preserves physical interpretation).
 
         Args:
@@ -386,8 +485,10 @@ class FlowVis:
         pred_np = pred.detach().cpu().numpy()
         err_np  = err.detach().cpu().numpy()
         points  = self._prepare_points(coords)
+        base_mesh = self._build_mesh(points)
+        use_surface = base_mesh.n_cells > 0
 
-        # Log₁₀(P) applied to GT/Pred only; error stays in physical units (Pa).
+        # Log10(P) applied to GT/Pred only; error stays in physical units (Pa).
         gt_vis   = np.stack(
             [self._preprocess(gt_np[:, :, c],   c) for c in range(num_channels)], axis=-1,
         )
@@ -409,11 +510,19 @@ class FlowVis:
                 val_clims[c] = (-vmax, vmax)
         err_clims = [self._get_clim(err_np[:, :, c]) for c in range(num_channels)]
 
+        win_w, win_h = self._compute_window_size(points, 3, num_channels)
+
         plotter = pv.Plotter(
             shape=(num_channels, 3),
             off_screen=True,
-            window_size=(self.window_width, self.subplot_height * num_channels),
+            window_size=(win_w, win_h),
         )
+
+        sbar_args = {
+            'height': 0.15, 'width': 0.6,
+            'position_x': 0.2, 'position_y': 0.01,
+            'vertical': False, 'fmt': '%.2e',
+        }
 
         col_titles = ['Ground Truth', 'Prediction', 'Abs Error']
         meshes: List[List[pv.PolyData]] = []  # meshes[channel][col]
@@ -426,19 +535,26 @@ class FlowVis:
             row: List[pv.PolyData] = []
             for col in range(3):
                 plotter.subplot(c, col)
-                mesh = pv.PolyData(points)
+                mesh = base_mesh.copy()
                 mesh.point_data['scalar'] = srcs[col][0, :, c].astype(np.float32)
-                plotter.add_mesh(
-                    mesh, scalars='scalar',
+
+                add_kw = dict(
+                    scalars='scalar',
                     cmap=cmaps[col],
                     clim=clims[col],
-                    point_size=point_size,
-                    render_points_as_spheres=False,
-                    scalar_bar_args={'title': self._scalar_bar_title(c, col)},
+                    scalar_bar_args={**sbar_args, 'title': self._scalar_bar_title(c, col)},
                 )
+                if use_surface:
+                    plotter.add_mesh(mesh, **add_kw)
+                else:
+                    plotter.add_mesh(
+                        mesh, **add_kw,
+                        point_size=point_size,
+                        render_points_as_spheres=True,
+                    )
                 if c == 0:
                     plotter.add_text(col_titles[col], font_size=11, position='upper_edge')
-                self._setup_camera(plotter)
+                self._setup_camera(plotter, points)
                 row.append(mesh)
 
             meshes.append(row)

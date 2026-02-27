@@ -43,6 +43,8 @@ class RolloutTrainer(BaseTrainer):
                  lambda_physics: float = 0.1,
                  lambda_mass: float = 1.0, lambda_momentum: float = 1.0, lambda_energy: float = 1.0,
                  latent_grid_size: Any = None,
+                 # gradient clipping
+                 max_grad_norm: float = 1.0,
                  # base params
                  **kwargs):
         """
@@ -59,7 +61,8 @@ class RolloutTrainer(BaseTrainer):
             lambda_mass (float): Sub-weight for mass conservation residual.
             lambda_momentum (float): Sub-weight for momentum conservation residual.
             lambda_energy (float): Sub-weight for energy conservation residual.
-            latent_grid_size: [L1, L2] for FD grid in physics loss.
+            latent_grid_size: [G1, G2] for FD grid in physics loss.
+            max_grad_norm (float): Max norm for gradient clipping (0 = disabled).
             **kwargs: Arguments passed to BaseTrainer.
         """
 
@@ -97,6 +100,7 @@ class RolloutTrainer(BaseTrainer):
         self.noise_std_init = noise_std_init
         self.noise_decay = noise_decay
         self.latent_grid_size = latent_grid_size
+        self.max_grad_norm = max_grad_norm
 
         # 3. Initialize curriculum state
         self.rollout_counter = 0

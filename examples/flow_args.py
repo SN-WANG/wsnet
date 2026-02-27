@@ -43,11 +43,6 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--num_workers", type=int, default=4,
                         help="Number of subprocesses for data loading.")
 
-    # Preprocessing
-    parser.add_argument("--use_log_pressure", type=bool, default=True,
-                        help="Apply log1p(p / 1e5) to pressure channel before standardization. "
-                             "Recommended for high-pressure-ratio (10000:1) data.")
-
     # ----------------------------------------------------------------------
     # 3. Model Architecture
     # ----------------------------------------------------------------------
@@ -83,6 +78,9 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--rff_sigma", type=float, default=1.0,
                         help="[GeoWNO] RFF projection scale. Controls spatial frequency of encoding "
                              "(1.0 = ~0.5 cycles across domain, survives KNN-IDW averaging).")
+    parser.add_argument("--wavelet_levels", type=int, default=2,
+                        help="[GeoWNO] Number of Haar DWT decomposition levels (J). "
+                             "J=1 = single-level, J=2 = two-level multi-resolution.")
 
     # ----------------------------------------------------------------------
     # 4. Training Strategy
@@ -109,6 +107,9 @@ def get_args() -> argparse.Namespace:
                         help="Initial Std dev of Gaussian noise injected into input state.")
     parser.add_argument("--noise_decay", type=float, default=0.7,
                         help="Decay factor for noise when rollout steps increase.")
+    parser.add_argument("--max_grad_norm", type=float, default=1.0,
+                        help="Max gradient norm for clipping (0 = disabled). "
+                             "Prevents gradient explosion in multi-step rollout.")
 
     # Physics loss
     parser.add_argument("--use_physics_loss", type=bool, default=False,

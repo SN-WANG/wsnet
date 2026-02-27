@@ -105,6 +105,9 @@ class BaseTrainer:
                 if is_training:
                     self.optimizer.zero_grad(set_to_none=True)
                     loss.backward()
+                    max_norm = getattr(self, "max_grad_norm", 0.0)
+                    if max_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm)
                     self.optimizer.step()
 
                 loss_val = loss.item()

@@ -284,89 +284,120 @@ class SpatioTemporalEncoder(nn.Module):
 
 class WaveletConv(nn.Module):
     """
-    Wavelet Convolution: DWT -> per-subband learnable channel mixer -> IDWT.
+    Multi-level Wavelet Convolution: J-level DWT -> per-subband learnable channel mixer -> IDWT.
 
-    For each subband, a Conv{1,2,3}d(width, width, kernel_size=1) is applied.
-    This replaces the spectral weight multiplication in FNO.
+    At each decomposition level j (1..J), detail subbands receive independent
+    Conv{1,2,3}d(width, width, 1) mixers. The final approximation subband at
+    level J also gets its own mixer. Reconstruction proceeds in reverse order.
+
+    J=1 recovers the original single-level WaveletConv (backward compatible).
     """
 
-    def __init__(self, channels: int, modes: List[int]):
+    def __init__(self, channels: int, modes: List[int], J: int = 1):
         """
         Args:
             channels: Number of feature channels (width).
             modes: Spatial dimension indicator (length of list = spatial_dim).
-                   Values are unused for Haar level-1 (no truncation), kept for API compat.
+            J: Number of decomposition levels (default 1 for backward compat).
         """
         super().__init__()
         self.spatial_dim = len(modes)
+        self.J = J
+        assert J >= 1, f'J must be >= 1, got {J}'
 
         _scale = 1.0 / channels
+
+        def _make_conv(dim: int) -> nn.Module:
+            conv_cls = {1: nn.Conv1d, 2: nn.Conv2d, 3: nn.Conv3d}[dim]
+            conv = conv_cls(channels, channels, 1)
+            nn.init.uniform_(conv.weight, -_scale, _scale)
+            nn.init.zeros_(conv.bias)
+            return conv
 
         if self.spatial_dim == 1:
             self.dwt = _HaarDWT1d()
             self.idwt = _HaarIDWT1d()
-            self.weight_approx = nn.Conv1d(channels, channels, 1)
-            self.weight_detail = nn.Conv1d(channels, channels, 1)
-            for _w in [self.weight_approx, self.weight_detail]:
-                nn.init.uniform_(_w.weight, -_scale, _scale)
-                nn.init.zeros_(_w.bias)
+            # J detail mixers + 1 approx mixer
+            self.detail_weights = nn.ModuleDict({
+                f'L{j}_D': _make_conv(1) for j in range(1, J + 1)
+            })
+            self.approx_weight = _make_conv(1)
 
         elif self.spatial_dim == 2:
             self.dwt = _HaarDWT2d()
             self.idwt = _HaarIDWT2d()
-            self.weight_LL = nn.Conv2d(channels, channels, 1)
-            self.weight_LH = nn.Conv2d(channels, channels, 1)
-            self.weight_HL = nn.Conv2d(channels, channels, 1)
-            self.weight_HH = nn.Conv2d(channels, channels, 1)
-            for _w in [self.weight_LL, self.weight_LH, self.weight_HL, self.weight_HH]:
-                nn.init.uniform_(_w.weight, -_scale, _scale)
-                nn.init.zeros_(_w.bias)
+            # 3 detail subbands per level + 1 final approx
+            detail_dict = {}
+            for j in range(1, J + 1):
+                for sub in ['LH', 'HL', 'HH']:
+                    detail_dict[f'L{j}_{sub}'] = _make_conv(2)
+            self.detail_weights = nn.ModuleDict(detail_dict)
+            self.approx_weight = _make_conv(2)
 
         elif self.spatial_dim == 3:
             self.dwt = _HaarDWT3d()
             self.idwt = _HaarIDWT3d()
-            self.weight_LLL = nn.Conv3d(channels, channels, 1)
-            self.weight_LLH = nn.Conv3d(channels, channels, 1)
-            self.weight_LHL = nn.Conv3d(channels, channels, 1)
-            self.weight_LHH = nn.Conv3d(channels, channels, 1)
-            self.weight_HLL = nn.Conv3d(channels, channels, 1)
-            self.weight_HLH = nn.Conv3d(channels, channels, 1)
-            self.weight_HHL = nn.Conv3d(channels, channels, 1)
-            self.weight_HHH = nn.Conv3d(channels, channels, 1)
-            for _w in [self.weight_LLL, self.weight_LLH, self.weight_LHL, self.weight_LHH,
-                       self.weight_HLL, self.weight_HLH, self.weight_HHL, self.weight_HHH]:
-                nn.init.uniform_(_w.weight, -_scale, _scale)
-                nn.init.zeros_(_w.bias)
+            # 7 detail subbands per level + 1 final approx
+            detail_dict = {}
+            for j in range(1, J + 1):
+                for sub in ['LLH', 'LHL', 'LHH', 'HLL', 'HLH', 'HHL', 'HHH']:
+                    detail_dict[f'L{j}_{sub}'] = _make_conv(3)
+            self.detail_weights = nn.ModuleDict(detail_dict)
+            self.approx_weight = _make_conv(3)
 
         else:
             raise ValueError(f'Only 1D, 2D, 3D supported. Got spatial_dim={self.spatial_dim}')
 
     def forward(self, x: Tensor) -> Tensor:
         if self.spatial_dim == 1:
-            approx, detail, L = self.dwt(x)
-            approx = self.weight_approx(approx)
-            detail = self.weight_detail(detail)
-            return self.idwt(approx, detail, L)
+            details = []
+            current = x
+            for j in range(1, self.J + 1):
+                approx, detail, L = self.dwt(current)
+                detail = self.detail_weights[f'L{j}_D'](detail)
+                details.append((detail, L))
+                current = approx
+            current = self.approx_weight(current)
+            for j in range(self.J, 0, -1):
+                detail, L = details[j - 1]
+                current = self.idwt(current, detail, L)
+            return current
 
         elif self.spatial_dim == 2:
-            LL, LH, HL, HH, H, W = self.dwt(x)
-            LL = self.weight_LL(LL)
-            LH = self.weight_LH(LH)
-            HL = self.weight_HL(HL)
-            HH = self.weight_HH(HH)
-            return self.idwt(LL, LH, HL, HH, H, W)
+            details = []
+            current = x
+            for j in range(1, self.J + 1):
+                LL, LH, HL, HH, H, W = self.dwt(current)
+                LH = self.detail_weights[f'L{j}_LH'](LH)
+                HL = self.detail_weights[f'L{j}_HL'](HL)
+                HH = self.detail_weights[f'L{j}_HH'](HH)
+                details.append((LH, HL, HH, H, W))
+                current = LL
+            current = self.approx_weight(current)
+            for j in range(self.J, 0, -1):
+                LH, HL, HH, H, W = details[j - 1]
+                current = self.idwt(current, LH, HL, HH, H, W)
+            return current
 
         elif self.spatial_dim == 3:
-            LLL, LLH, LHL, LHH, HLL, HLH, HHL, HHH, X, Y, Z = self.dwt(x)
-            LLL = self.weight_LLL(LLL)
-            LLH = self.weight_LLH(LLH)
-            LHL = self.weight_LHL(LHL)
-            LHH = self.weight_LHH(LHH)
-            HLL = self.weight_HLL(HLL)
-            HLH = self.weight_HLH(HLH)
-            HHL = self.weight_HHL(HHL)
-            HHH = self.weight_HHH(HHH)
-            return self.idwt(LLL, LLH, LHL, LHH, HLL, HLH, HHL, HHH, X, Y, Z)
+            details = []
+            current = x
+            for j in range(1, self.J + 1):
+                LLL, LLH, LHL, LHH, HLL, HLH, HHL, HHH, X, Y, Z = self.dwt(current)
+                LLH = self.detail_weights[f'L{j}_LLH'](LLH)
+                LHL = self.detail_weights[f'L{j}_LHL'](LHL)
+                LHH = self.detail_weights[f'L{j}_LHH'](LHH)
+                HLL = self.detail_weights[f'L{j}_HLL'](HLL)
+                HLH = self.detail_weights[f'L{j}_HLH'](HLH)
+                HHL = self.detail_weights[f'L{j}_HHL'](HHL)
+                HHH = self.detail_weights[f'L{j}_HHH'](HHH)
+                details.append((LLH, LHL, LHH, HLL, HLH, HHL, HHH, X, Y, Z))
+                current = LLL
+            current = self.approx_weight(current)
+            for j in range(self.J, 0, -1):
+                LLH, LHL, LHH, HLL, HLH, HHL, HHH, X, Y, Z = details[j - 1]
+                current = self.idwt(current, LLH, LHL, LHH, HLL, HLH, HHL, HHH, X, Y, Z)
+            return current
 
 
 # ============================================================
@@ -380,10 +411,10 @@ class WNOBlock(nn.Module):
     Identical structure to FNOBlock but uses WaveletConv instead of SpectralConv.
     """
 
-    def __init__(self, width: int, modes: List[int]):
+    def __init__(self, width: int, modes: List[int], J: int = 1):
         super().__init__()
         self.spatial_dim = len(modes)
-        self.wavelet_conv = WaveletConv(width, modes)
+        self.wavelet_conv = WaveletConv(width, modes, J=J)
 
         if self.spatial_dim == 1:
             self.pointwise_conv = nn.Conv1d(width, width, 1)
@@ -439,6 +470,7 @@ class GeoWNO(nn.Module):
         time_features: int = 4,
         max_steps: int = 1000,
         rff_sigma: float = 1.0,
+        wavelet_levels: int = 1,
     ):
         """
         Args:
@@ -454,6 +486,8 @@ class GeoWNO(nn.Module):
             rff_features: RFF embedding half-dimension (output: 2*rff_features).
             time_features: Temporal PE half-dimension (output: 2*time_features).
             max_steps: Maximum time step (for sinusoidal frequency scaling).
+            rff_sigma: RFF projection scale.
+            wavelet_levels: Number of Haar DWT decomposition levels (J). Default 1.
         """
         super().__init__()
 
@@ -489,7 +523,7 @@ class GeoWNO(nn.Module):
         self.fc_lift = nn.Linear(lift_in, width)
 
         # WNO blocks (replaces FNO blocks)
-        self.wno_blocks = nn.ModuleList([WNOBlock(width, modes) for _ in range(depth)])
+        self.wno_blocks = nn.ModuleList([WNOBlock(width, modes, J=wavelet_levels) for _ in range(depth)])
 
         # Projection (same as GeoFNO)
         self.fc_proj1 = nn.Linear(width, 128)

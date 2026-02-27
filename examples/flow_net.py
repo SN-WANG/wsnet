@@ -12,7 +12,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from typing import Dict, Tuple
 
-import args_flow
+import flow_args
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if project_root not in sys.path: sys.path.insert(0, project_root)
@@ -42,31 +42,21 @@ LOG_P_REF: float = 1e5
 
 class ScaledCFDataset(Dataset):
     """
-    Wraps FlowData to apply log-pressure transform, feature standardization,
-    and coordinate normalization.
-
-    The log-pressure transform is applied BEFORE fitting the scaler so that
-    the scaler operates on the compressed representation.
+    Wraps FlowData to apply feature standardization and coordinate normalization.
 
     Attributes:
         dataset:              The underlying raw dataset.
         feature_scaler:       Fitted StandardScalerTensor.
         coord_scaler:         Fitted MinMaxScalerTensor.
-        use_log_pressure:     Whether to apply log1p(p / LOG_P_REF) to the pressure channel.
-        pressure_channel_idx: Index of the pressure channel in the feature vector.
     """
     def __init__(
             self, dataset: FlowData,
             feature_scaler: StandardScalerTensor,
             coord_scaler: MinMaxScalerTensor,
-            use_log_pressure: bool = False,
-            pressure_channel_idx: int = 2,
         ):
         self.dataset = dataset
         self.feature_scaler = feature_scaler
         self.coord_scaler = coord_scaler
-        self.use_log_pressure = use_log_pressure
-        self.pressure_channel_idx = pressure_channel_idx
 
     def __len__(self) -> int:
         return len(self.dataset)
@@ -74,27 +64,13 @@ class ScaledCFDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[Tensor, Tensor]:
         seq, coords = self.dataset[idx]
 
-        # 1. Log-pressure transform (before standardization)
-        if self.use_log_pressure:
-            seq = seq.clone()
-            seq[..., self.pressure_channel_idx] = torch.log1p(
-                seq[..., self.pressure_channel_idx] / LOG_P_REF
-            )
-
-        # 2. Feature standardization (Mean/Std)
+        # Feature standardization (Mean/Std)
         seq_std = self.feature_scaler.transform(seq)
 
-        # 3. Coordinate normalization (Min/Max -> [-1, 1])
+        # Coordinate normalization (Min/Max -> [-1, 1])
         coords_norm = self.coord_scaler.transform(coords)
 
         return seq_std, coords_norm
-
-
-def _inverse_transform_pressure(seq: Tensor, p_idx: int) -> Tensor:
-    """Invert log1p(p / LOG_P_REF) -> physical pressure on a sequence tensor."""
-    seq = seq.clone()
-    seq[..., p_idx] = torch.expm1(seq[..., p_idx]) * LOG_P_REF
-    return seq
 
 
 # ======================================================================
@@ -124,6 +100,7 @@ def _build_model(args: argparse.Namespace) -> torch.nn.Module:
             time_features=args.time_features,
             max_steps=args.win_len,
             rff_sigma=args.rff_sigma,
+            wavelet_levels=args.wavelet_levels,
         )
     else:
         raise ValueError(f"Unknown model_type '{args.model_type}'. Choices: geofno, geowno")
@@ -155,15 +132,10 @@ def train_pipeline(args: argparse.Namespace) -> None:
     train_coords = torch.cat(train_raw.coords, dim=0)
     feature_scaler = StandardScalerTensor().fit(train_seqs, channel_dim=-1)
     coord_scaler = MinMaxScalerTensor(norm_range="bipolar").fit(train_coords, channel_dim=-1)
+    scalers = {"feature_scaler": feature_scaler, "coord_scaler": coord_scaler}
 
-    dataset_kw = dict(
-        feature_scaler=feature_scaler,
-        coord_scaler=coord_scaler,
-        use_log_pressure=args.use_log_pressure,
-        pressure_channel_idx=args.spatial_dim,
-    )
-    train_dataset = ScaledCFDataset(train_raw, **dataset_kw)
-    val_dataset = ScaledCFDataset(val_raw, **dataset_kw)
+    train_dataset = ScaledCFDataset(train_raw, **scalers)
+    val_dataset = ScaledCFDataset(val_raw, **scalers)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                               num_workers=args.num_workers, pin_memory=True)
@@ -178,8 +150,6 @@ def train_pipeline(args: argparse.Namespace) -> None:
     logger.info(f"model has {hue.m}{num_params}{hue.q} parameters")
 
     # --- 3. Training Execution ---
-    scalers = {"feature_scaler": feature_scaler, "coord_scaler": coord_scaler}
-
     trainer = RolloutTrainer(
         # base params
         model=model, lr=args.lr, max_epochs=args.max_epochs,
@@ -189,6 +159,8 @@ def train_pipeline(args: argparse.Namespace) -> None:
         # curriculum params
         max_rollout_steps=args.max_rollout_steps, rollout_patience=args.rollout_patience,
         noise_std_init=args.noise_std_init, noise_decay=args.noise_decay,
+        # gradient clipping
+        max_grad_norm=args.max_grad_norm,
         # physics params
         use_physics_loss=args.use_physics_loss,
         lambda_physics=args.lambda_physics,
@@ -235,8 +207,7 @@ def inference_pipeline(args: argparse.Namespace) -> None:
     )
 
     test_dataset = ScaledCFDataset(
-        test_raw, feature_scaler=feature_scaler, coord_scaler=coord_scaler,
-        use_log_pressure=args.use_log_pressure, pressure_channel_idx=args.spatial_dim,
+        test_raw, feature_scaler=feature_scaler, coord_scaler=coord_scaler
     )
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
@@ -276,10 +247,6 @@ def inference_pipeline(args: argparse.Namespace) -> None:
 
             pred_seq = feature_scaler.inverse_transform(pred_seq_std).cpu().squeeze(0)
             gt_seq = feature_scaler.inverse_transform(seq_std).cpu().squeeze(0)
-
-            if args.use_log_pressure:
-                pred_seq = _inverse_transform_pressure(pred_seq, args.spatial_dim)
-                gt_seq = _inverse_transform_pressure(gt_seq, args.spatial_dim)
 
             # ------------------------------------------------------------------
 
@@ -408,7 +375,7 @@ def probe_pipeline(args: argparse.Namespace) -> None:
 # ======================================================================
 
 if __name__ == "__main__":
-    args = args_flow.get_args()
+    args = flow_args.get_args()
 
     if "probe" in args.mode:  probe_pipeline(args)
     if "train" in args.mode:  train_pipeline(args)

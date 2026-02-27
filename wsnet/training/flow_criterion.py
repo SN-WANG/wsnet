@@ -139,23 +139,27 @@ class FlowCriterion(BaseCriterion):
     """
     Physics-informed loss for compressible flow (FD-based, no autograd).
 
-    Total loss = NMSE(pred, target) + lambda_physics * L_physics
+    Total loss = per-channel NMSE(pred, target) + lambda_physics * L_physics
 
-    Physics residuals are computed in normalized feature space via finite differences
-    on a scatter-projected regular grid. Zero-residual is scale-invariant, so working
-    in normalized space is valid without denormalization.
+    Data loss uses per-channel NMSE: for each channel c, compute
+    NMSE_c = sum((t_c - p_c)^2) / sum(t_c^2), then sum across channels.
+    This prevents high-magnitude channels from dominating the loss.
+
+    Physics residuals enforce compressible Euler equations on a scatter-projected
+    regular grid. Density is inferred via ideal gas proportionality rho ~ p/T
+    in normalized space (no physical constants needed).
 
     Channel layout (inferred from coords.shape[-1] = spatial_dim):
         2D: [Vx, Vy, P_log, T]        v=[:2], p=[2], T=[3]
         3D: [Vx, Vy, Vz, P_log, T]    v=[:3], p=[3], T=[4]
 
-    Kinematic residuals enforced (density-free, no ideal-gas law needed):
-        - Mass proxy:     ∇·v ≈ 0
-        - Momentum proxy: ∂v/∂t + ∇p ≈ 0
-        - Energy proxy:   ∂T/∂t ≈ 0
+    Compressible Euler residuals:
+        - Mass:     d(rho)/dt + div(rho * v) ≈ 0
+        - Momentum: dv/dt + (1/rho) * grad(p) ≈ 0
+        - Energy:   dT/dt + v · grad(T) ≈ 0
 
     Args:
-        lambda_physics:      Weight of physics loss relative to data (NMSE) loss.
+        lambda_physics:  Weight of physics loss relative to data (NMSE) loss.
         lambda_mass:     Sub-weight for mass residual.
         lambda_momentum: Sub-weight for momentum residual.
         lambda_energy:   Sub-weight for energy residual.
@@ -190,7 +194,11 @@ class FlowCriterion(BaseCriterion):
         dt: float,
     ) -> Tensor:
         """
-        Compute physics residual loss via FD on latent grid.
+        Compute compressible Euler physics residual loss via FD on latent grid.
+
+        Uses ideal gas proportionality rho ~ p/T in normalized space to infer
+        density, then enforces compressible continuity, momentum, and energy
+        conservation residuals.
 
         Args:
             pred:             (B, N, C) — predicted state at t+1
@@ -205,24 +213,35 @@ class FlowCriterion(BaseCriterion):
         pred_grid = _scatter_to_grid(pred, coords, latent_grid_size)
         prev_grid = _scatter_to_grid(prev, coords, latent_grid_size)
 
-        # Temporal FD
-        d_dt = (pred_grid - prev_grid) / dt
-
         # Channel indexing: [Vx, Vy, (Vz,) P_log, T]
-        v_grid = pred_grid[:, :sd]   # (B, sd, *spatial)
-        p_grid = pred_grid[:, sd]    # (B, *spatial)
+        v_pred = pred_grid[:, :sd]       # (B, sd, *spatial)
+        p_pred = pred_grid[:, sd]        # (B, *spatial)
+        T_pred = pred_grid[:, sd + 1]    # (B, *spatial)
 
-        # Mass proxy: ∇·v ≈ 0
-        loss_mass = torch.mean(_grid_divergence(v_grid) ** 2)
+        v_prev = prev_grid[:, :sd]
+        p_prev = prev_grid[:, sd]
+        T_prev = prev_grid[:, sd + 1]
 
-        # Momentum proxy: ∂v/∂t + ∇p ≈ 0
-        dv_dt = d_dt[:, :sd]
-        grad_p = _grid_gradient(p_grid)
-        loss_momentum = torch.mean((dv_dt + grad_p) ** 2)
+        # Infer density from normalized space (proportional to p/T)
+        rho_pred = p_pred / (T_pred + self.eps)
+        rho_prev = p_prev / (T_prev + self.eps)
 
-        # Energy proxy: ∂T/∂t ≈ 0
-        dT_dt = d_dt[:, sd + 1]
-        loss_energy = torch.mean(dT_dt ** 2)
+        # Mass conservation: d(rho)/dt + div(rho * v) ~ 0
+        drho_dt = (rho_pred - rho_prev) / dt
+        rho_v = rho_pred.unsqueeze(1) * v_pred   # (B, sd, *spatial)
+        loss_mass = torch.mean((drho_dt + _grid_divergence(rho_v)) ** 2)
+
+        # Momentum conservation: dv/dt + (1/rho) * grad(p) ~ 0
+        dv_dt = (v_pred - v_prev) / dt
+        grad_p = _grid_gradient(p_pred)
+        inv_rho = 1.0 / (rho_pred.unsqueeze(1) + self.eps)
+        loss_momentum = torch.mean((dv_dt + inv_rho * grad_p) ** 2)
+
+        # Energy conservation: dT/dt + v . grad(T) ~ 0  (convective transport)
+        dT_dt = (T_pred - T_prev) / dt
+        grad_T = _grid_gradient(T_pred)
+        v_dot_gradT = (v_pred * grad_T).sum(dim=1)
+        loss_energy = torch.mean((dT_dt + v_dot_gradT) ** 2)
 
         return (self.lambda_mass * loss_mass +
                 self.lambda_momentum * loss_momentum +
@@ -253,11 +272,13 @@ class FlowCriterion(BaseCriterion):
         Returns:
             Scalar loss tensor.
         """
-        # Data loss (NMSE)
+        # Data loss (per-channel NMSE)
         if target is not None:
-            mse = torch.sum((target - pred) ** 2)
-            norm = torch.sum(target ** 2) + self.eps
-            data_loss = mse / norm
+            C = pred.shape[-1]
+            sq_err = (target - pred) ** 2
+            mse_c = sq_err.reshape(-1, C).sum(0)        # (C,)
+            norm_c = (target ** 2).reshape(-1, C).sum(0) + self.eps  # (C,)
+            data_loss = (mse_c / norm_c).sum()
         else:
             data_loss = torch.tensor(0.0, device=pred.device)
 
