@@ -309,8 +309,7 @@ def probe_pipeline(args: argparse.Namespace) -> None:
     coord_scaler = MinMaxScalerTensor(norm_range="bipolar").fit(train_coords, channel_dim=-1)
 
     probe_dataset = ScaledCFDataset(
-        train_raw, feature_scaler=feature_scaler, coord_scaler=coord_scaler,
-        use_log_pressure=args.use_log_pressure, pressure_channel_idx=args.spatial_dim,
+        train_raw, feature_scaler=feature_scaler, coord_scaler=coord_scaler
     )
     probe_loader = DataLoader(probe_dataset, batch_size=args.batch_size, shuffle=False,
                               num_workers=args.num_workers, pin_memory=True)

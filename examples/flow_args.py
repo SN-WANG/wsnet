@@ -112,7 +112,7 @@ def get_args() -> argparse.Namespace:
                              "Prevents gradient explosion in multi-step rollout.")
 
     # Physics loss
-    parser.add_argument("--use_physics_loss", type=bool, default=False,
+    parser.add_argument("--use_physics_loss", type=bool, default=True,
                         help="Enable CompressibleFlowCriterion (NMSE + FD-based physics residuals).")
     parser.add_argument("--lambda_physics", type=float, default=0.1,
                         help="Weight of physics loss relative to data (NMSE) loss.")
