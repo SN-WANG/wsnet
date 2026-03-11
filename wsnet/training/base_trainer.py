@@ -113,14 +113,14 @@ class BaseTrainer:
 
         return float(np.mean(losses))
 
-    def _on_epoch_start(self, **kwargs) -> None:
+    def _on_epoch_start(self, train_loss=None, val_loss=None, **kwargs) -> None:
         """
         Optional hook called at the start of each epoch.
         Default implementation is a no-op.
         """
         pass
 
-    def _on_epoch_end(self, **kwargs) -> None:
+    def _on_epoch_end(self, train_loss=None, val_loss=None, **kwargs) -> None:
         """
         Optional hook called at the end of each epoch.
         Default implementation is a no-op.
