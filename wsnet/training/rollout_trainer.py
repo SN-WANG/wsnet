@@ -5,7 +5,7 @@ import torch
 from torch import nn, Tensor
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from typing import Any
+from typing import Any, Optional
 
 from wsnet.training.base_trainer import BaseTrainer
 from wsnet.training.base_criterion import NMSECriterion
@@ -49,6 +49,8 @@ class RolloutTrainer(BaseTrainer):
                  # curriculum params
                  max_rollout_steps: int = 5, rollout_patience: int = 40,
                  noise_std_init: float = 0.05, noise_decay: float = 0.9,
+                 # boundary condition
+                 boundary_condition: Optional[Any] = None,
                  # base params
                  **kwargs):
         """
@@ -62,6 +64,9 @@ class RolloutTrainer(BaseTrainer):
             rollout_patience (int): Number of epochs between curriculum advances.
             noise_std_init (float): Initial std dev of Gaussian noise injected into inputs.
             noise_decay (float): Multiplicative decay applied to noise_std at each curriculum advance.
+            boundary_condition: Optional BoundaryCondition instance for hard BC enforcement
+                during rollout. When provided, wall-node predictions are replaced with known
+                Dirichlet values after each forward step, preventing error accumulation.
             **kwargs: Passed to BaseTrainer (e.g., scalers, output_dir, device, criterion).
         """
 
@@ -93,6 +98,9 @@ class RolloutTrainer(BaseTrainer):
         self.log_update_info = False
         self.current_rollout_steps = 1
         self.current_noise_std = noise_std_init
+
+        # 4. Boundary condition enforcement
+        self.boundary_condition = boundary_condition
 
     def _update_curriculum(self) -> None:
         """
@@ -174,6 +182,10 @@ class RolloutTrainer(BaseTrainer):
                     pred_state = self.model(input_state, coords)
             else:
                 pred_state = self.model(input_state)
+
+            # b2. Hard BC enforcement: replace wall-node predictions with known values
+            if self.boundary_condition is not None:
+                pred_state = self.boundary_condition.enforce(pred_state)
 
             # c. Weighted loss accumulation
             target_state = seq[:, t + 1]

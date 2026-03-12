@@ -1,4 +1,4 @@
-# Argument Configuration for STMFormer Training and Inference
+# Argument Configuration for HyperFlowNet Training and Inference
 # Author: Shengning Wang
 
 import argparse
@@ -8,14 +8,14 @@ import torch
 def get_args() -> argparse.Namespace:
     """Parse command-line arguments for the flow simulation pipeline.
 
-    Supports three model architectures (STMFormer, GeoFNO, Transolver) and
+    Supports three model architectures (HyperFlowNet, GeoFNO, Transolver) and
     two training strategies (rollout with curriculum, teacher forcing baseline).
 
     Returns:
         argparse.Namespace: Parsed arguments containing all hyperparameters.
     """
     parser = argparse.ArgumentParser(
-        description="STMFormer: Spatio-Temporal Mesh Transformer for Flow Simulation",
+        description="HyperFlowNet: Grid-Free Neural Operator for Flow Simulation",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
@@ -68,13 +68,13 @@ def get_args() -> argparse.Namespace:
     # ==================================================================
     model = parser.add_argument_group("Model Selection")
     model.add_argument(
-        "--model_type", type=str, default="stmformer",
-        choices=["stmformer", "geofno", "transolver"],
+        "--model_type", type=str, default="hyperflownet",
+        choices=["hyperflownet", "geofno", "transolver"],
         help="Neural operator architecture.")
     model.add_argument(
         "--trainer_type", type=str, default="rollout",
         choices=["rollout", "teacher_forcing"],
-        help="Training strategy. 'rollout': curriculum + noise (STMFormer). "
+        help="Training strategy. 'rollout': curriculum + noise (HyperFlowNet). "
              "'teacher_forcing': GT-input baseline (GeoFNO/Transolver).")
 
     # ==================================================================
@@ -89,43 +89,46 @@ def get_args() -> argparse.Namespace:
         help="Hidden channel dimension.")
 
     # ==================================================================
-    # 5. STMFormer-Specific Parameters
+    # 5. HyperFlowNet-Specific Parameters
     # ==================================================================
-    stm = parser.add_argument_group("STMFormer")
-    stm.add_argument(
+    hfn = parser.add_argument_group("HyperFlowNet")
+    hfn.add_argument(
         "--num_slices", type=int, default=32,
         help="Number of mesh slice tokens (M). Higher M captures more physics modes.")
-    stm.add_argument(
+    hfn.add_argument(
         "--num_heads", type=int, default=8,
         help="Number of attention heads for slice-space MHA.")
 
     # Ablation switches
-    stm.add_argument(
+    hfn.add_argument(
         "--use_spatial_encoding", action=argparse.BooleanOptionalAction, default=True,
         help="Enable RFF spatial encoding. Disable for ablation (--no-use_spatial_encoding).")
-    stm.add_argument(
+    hfn.add_argument(
         "--use_temporal_encoding", action=argparse.BooleanOptionalAction, default=True,
         help="Enable sinusoidal temporal encoding. Disable for ablation.")
-    stm.add_argument(
-        "--use_boundary_padding", action=argparse.BooleanOptionalAction, default=True,
-        help="Enable boundary ghost-node padding for improved boundary accuracy.")
-    stm.add_argument(
-        "--padding_ratio", type=float, default=0.05,
-        help="Ghost node offset as fraction of domain extent.")
+
+    # Boundary condition enforcement
+    hfn.add_argument(
+        "--use_hard_bc", action=argparse.BooleanOptionalAction, default=True,
+        help="Enable hard boundary condition enforcement during rollout. "
+             "Replaces wall-node velocity predictions with known no-slip values.")
+    hfn.add_argument(
+        "--velocity_threshold", type=float, default=1e-4,
+        help="Velocity magnitude threshold for data-driven wall node detection.")
 
     # Spatial encoding
-    stm.add_argument(
+    hfn.add_argument(
         "--coord_features", type=int, default=8,
         help="RFF half-dimension (output: 2 * coord_features). Set 0 for raw coords.")
-    stm.add_argument(
+    hfn.add_argument(
         "--coord_sigma", type=float, default=1.0,
         help="RFF projection scale controlling spatial frequency bandwidth.")
 
     # Temporal encoding
-    stm.add_argument(
+    hfn.add_argument(
         "--time_features", type=int, default=4,
         help="Sinusoidal PE half-dimension (output: 2 * time_features).")
-    stm.add_argument(
+    hfn.add_argument(
         "--max_steps", type=int, default=1000,
         help="Reference max time step for sinusoidal frequency scaling.")
 
@@ -147,9 +150,9 @@ def get_args() -> argparse.Namespace:
         help="Hidden dimension of the deformation MLP.")
 
     # ==================================================================
-    # 7. Transolver-Specific Parameters (Baseline)
+    # 7. Transolver-Specific Parameters
     # ==================================================================
-    tsv = parser.add_argument_group("Transolver (Baseline)")
+    tsv = parser.add_argument_group("Transolver")
     tsv.add_argument(
         "--tsv_num_slices", type=int, default=32,
         help="Number of physics slice tokens for original Transolver.")

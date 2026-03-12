@@ -6,7 +6,7 @@
 # Source: https://github.com/thuml/Transolver
 #
 # This file provides the ORIGINAL Transolver architecture as a baseline
-# for comparison with STMFormer. Uses the irregular mesh variant.
+# for comparison with HyperFlowNet. Uses the irregular mesh variant.
 
 import torch
 from torch import nn, Tensor
