@@ -52,7 +52,7 @@ def get_args() -> argparse.Namespace:
         "--spatial_dim", type=int, default=2, choices=[2, 3],
         help="Spatial dimensionality of the mesh (2D or 3D).")
     data.add_argument(
-        "--win_len", type=int, default=8,
+        "--win_len", type=int, default=11,
         help="Temporal window length for sequence slicing (input + target).")
     data.add_argument(
         "--win_stride", type=int, default=1,
@@ -94,7 +94,7 @@ def get_args() -> argparse.Namespace:
     # ==================================================================
     hfn = parser.add_argument_group("HyperFlowNet")
     hfn.add_argument(
-        "--num_slices", type=int, default=48,
+        "--num_slices", type=int, default=32,
         help="Number of mesh slice tokens (M). Higher M captures more physics modes.")
     hfn.add_argument(
         "--num_heads", type=int, default=8,
@@ -119,7 +119,7 @@ def get_args() -> argparse.Namespace:
 
     # Spatial encoding
     hfn.add_argument(
-        "--coord_features", type=int, default=16,
+        "--coord_features", type=int, default=8,
         help="LFF half-dimension (output: 2 * coord_features). Set 0 for raw coords.")
 
     # Temporal encoding
@@ -175,7 +175,7 @@ def get_args() -> argparse.Namespace:
         "--weight_decay", type=float, default=1e-4,
         help="L2 regularization coefficient for AdamW.")
     optim.add_argument(
-        "--max_epochs", type=int, default=250,
+        "--max_epochs", type=int, default=360,
         help="Maximum number of training epochs.")
     optim.add_argument(
         "--eta_min", type=float, default=1e-6,
@@ -190,7 +190,7 @@ def get_args() -> argparse.Namespace:
     # ==================================================================
     curriculum = parser.add_argument_group("Curriculum (Rollout Trainer)")
     curriculum.add_argument(
-        "--max_rollout_steps", type=int, default=7,
+        "--max_rollout_steps", type=int, default=10,
         help="Maximum autoregressive rollout steps (curriculum ceiling).")
     curriculum.add_argument(
         "--rollout_patience", type=int, default=35,
